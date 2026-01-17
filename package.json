@@ -1,0 +1,38 @@
+{
+  "name": "focus-friend",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Smart Procrastination Manager - Desktop productivity app",
+  "scripts": {
+    "dev:desktop": "pnpm --filter @focus-friend/desktop dev",
+    "dev:api": "pnpm --filter @focus-friend/api dev",
+    "build:desktop": "pnpm --filter @focus-friend/desktop build",
+    "build:api": "pnpm --filter @focus-friend/api build",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "keywords": [
+    "productivity",
+    "focus",
+    "electron",
+    "desktop-app"
+  ],
+  "author": "Your Team Name",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=8.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^10.0.0",
+    "eslint-plugin-prettier": "^5.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.0.0"
+  }
+}
