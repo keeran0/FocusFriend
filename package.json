@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "description": "Smart Procrastination Manager - Desktop productivity app",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron"
+    ]
+  },
   "scripts": {
     "dev:desktop": "pnpm --filter @focus-friend/desktop dev",
     "dev:api": "pnpm --filter @focus-friend/api dev",
