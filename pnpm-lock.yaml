@@ -104,6 +104,16 @@ importers:
         specifier: ^0.14.0
         version: 0.14.6
 
+  packages/shared:
+    dependencies:
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+    devDependencies:
+      typescript:
+        specifier: ^5.0.0
+        version: 5.9.3
+
 packages:
 
   7zip-bin@5.2.0:
