@@ -1,0 +1,309 @@
+// Prisma Schema for Focus Friend (Prisma v6)
+// Documentation: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// USER MODELS
+// ============================================
+
+model User {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  username    String   @unique
+  displayName String   @map("display_name")
+  password    String
+  avatarUrl   String?  @map("avatar_url")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  settings         UserSettings?
+  sessions         FocusSession[]
+  achievements     UserAchievement[]
+  pointsHistory    PointsTransaction[]
+  
+  // Social relations
+  friendshipsInitiated Friendship[]  @relation("FriendshipInitiator")
+  friendshipsReceived  Friendship[]  @relation("FriendshipReceiver")
+  ownedGroups          StudyGroup[]  @relation("GroupOwner")
+  groupMemberships     GroupMember[]
+  
+  // Refresh tokens for auth
+  refreshTokens    RefreshToken[]
+
+  @@map("users")
+}
+
+model UserSettings {
+  id                     String            @id @default(cuid())
+  userId                 String            @unique @map("user_id")
+  
+  // Notification preferences
+  notificationsEnabled   Boolean           @default(true) @map("notifications_enabled")
+  nudgeFrequency         NudgeFrequency    @default(MODERATE) @map("nudge_frequency")
+  quietHoursStart        String?           @map("quiet_hours_start")
+  quietHoursEnd          String?           @map("quiet_hours_end")
+  
+  // Session preferences
+  defaultSessionDuration Int               @default(25) @map("default_session_duration")
+  idleThreshold          Int               @default(120) @map("idle_threshold")
+  
+  // Privacy
+  profileVisibility      ProfileVisibility @default(FRIENDS_ONLY) @map("profile_visibility")
+  showOnLeaderboard      Boolean           @default(true) @map("show_on_leaderboard")
+  
+  createdAt              DateTime          @default(now()) @map("created_at")
+  updatedAt              DateTime          @updatedAt @map("updated_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_settings")
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  token     String   @unique
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("refresh_tokens")
+}
+
+// ============================================
+// SESSION MODELS
+// ============================================
+
+model FocusSession {
+  id              String        @id @default(cuid())
+  userId          String        @map("user_id")
+  
+  startTime       DateTime      @map("start_time")
+  endTime         DateTime?     @map("end_time")
+  plannedDuration Int           @map("planned_duration")
+  actualDuration  Int?          @map("actual_duration")
+  
+  status          SessionStatus @default(ACTIVE)
+  focusScore      Int           @default(100) @map("focus_score")
+  idleTime        Int           @default(0) @map("idle_time")
+  nudgeCount      Int           @default(0) @map("nudge_count")
+  pointsEarned    Int           @default(0) @map("points_earned")
+  
+  note            String?
+  tags            String[]      @default([])
+  
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activityEvents  ActivityEvent[]
+  nudges          Nudge[]
+
+  @@index([userId, startTime])
+  @@index([userId, status])
+  @@map("focus_sessions")
+}
+
+model ActivityEvent {
+  id        String            @id @default(cuid())
+  sessionId String            @map("session_id")
+  timestamp DateTime          @default(now())
+  type      ActivityEventType
+  data      Json?
+
+  // Relations
+  session FocusSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, timestamp])
+  @@map("activity_events")
+}
+
+model Nudge {
+  id             String    @id @default(cuid())
+  sessionId      String    @map("session_id")
+  timestamp      DateTime  @default(now())
+  type           NudgeType
+  message        String
+  acknowledged   Boolean   @default(false)
+  acknowledgedAt DateTime? @map("acknowledged_at")
+
+  // Relations
+  session FocusSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("nudges")
+}
+
+// ============================================
+// GAMIFICATION MODELS
+// ============================================
+
+model UserAchievement {
+  id            String   @id @default(cuid())
+  userId        String   @map("user_id")
+  achievementId String   @map("achievement_id")
+  unlockedAt    DateTime @default(now()) @map("unlocked_at")
+  
+  currentValue  Int      @default(0) @map("current_value")
+  targetValue   Int      @map("target_value")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, achievementId])
+  @@index([userId])
+  @@map("user_achievements")
+}
+
+model PointsTransaction {
+  id          String                @id @default(cuid())
+  userId      String                @map("user_id")
+  amount      Int
+  type        PointsTransactionType
+  description String
+  referenceId String?               @map("reference_id")
+  createdAt   DateTime              @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("points_transactions")
+}
+
+// ============================================
+// SOCIAL MODELS
+// ============================================
+
+model Friendship {
+  id        String           @id @default(cuid())
+  userId    String           @map("user_id")
+  friendId  String           @map("friend_id")
+  status    FriendshipStatus @default(PENDING)
+  createdAt DateTime         @default(now()) @map("created_at")
+  updatedAt DateTime         @updatedAt @map("updated_at")
+
+  // Relations
+  user   User @relation("FriendshipInitiator", fields: [userId], references: [id], onDelete: Cascade)
+  friend User @relation("FriendshipReceiver", fields: [friendId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, friendId])
+  @@index([userId, status])
+  @@index([friendId, status])
+  @@map("friendships")
+}
+
+model StudyGroup {
+  id           String   @id @default(cuid())
+  name         String
+  description  String?
+  avatarUrl    String?  @map("avatar_url")
+  ownerId      String   @map("owner_id")
+  isPrivate    Boolean  @default(false) @map("is_private")
+  maxMembers   Int      @default(20) @map("max_members")
+  weeklyGoal   Int?     @map("weekly_goal")
+  inviteCode   String?  @unique @map("invite_code")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  owner   User          @relation("GroupOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members GroupMember[]
+
+  @@index([ownerId])
+  @@map("study_groups")
+}
+
+model GroupMember {
+  id                 String    @id @default(cuid())
+  groupId            String    @map("group_id")
+  userId             String    @map("user_id")
+  role               GroupRole @default(MEMBER)
+  joinedAt           DateTime  @default(now()) @map("joined_at")
+  weeklyContribution Int       @default(0) @map("weekly_contribution")
+
+  // Relations
+  group StudyGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@index([groupId])
+  @@index([userId])
+  @@map("group_members")
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum NudgeFrequency {
+  GENTLE
+  MODERATE
+  AGGRESSIVE
+}
+
+enum ProfileVisibility {
+  PUBLIC
+  FRIENDS_ONLY
+  PRIVATE
+}
+
+enum SessionStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ABANDONED
+}
+
+enum ActivityEventType {
+  SESSION_START
+  SESSION_PAUSE
+  SESSION_RESUME
+  SESSION_END
+  IDLE_DETECTED
+  ACTIVITY_RESUMED
+  NUDGE_SENT
+  NUDGE_ACKNOWLEDGED
+}
+
+enum NudgeType {
+  GENTLE
+  MODERATE
+  URGENT
+  MOTIVATIONAL
+  STREAK_REMINDER
+}
+
+enum PointsTransactionType {
+  SESSION_COMPLETE
+  ACHIEVEMENT_UNLOCK
+  STREAK_BONUS
+  DAILY_BONUS
+  REFERRAL_BONUS
+  GROUP_BONUS
+}
+
+enum FriendshipStatus {
+  PENDING
+  ACCEPTED
+  BLOCKED
+}
+
+enum GroupRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
