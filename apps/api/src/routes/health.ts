@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { HealthCheckResponse } from '../types/index.js';
 import { successResponse } from '../utils/index.js';
+import { prisma } from '../lib/prisma.js';
 
 // Track server start time for uptime calculation
 const startTime = Date.now();
@@ -8,20 +9,31 @@ const startTime = Date.now();
 const healthRoutes: FastifyPluginAsync = async fastify => {
   /**
    * GET /health
-   * Basic health check - used by load balancers and monitoring
+   * Detailed health check with database status
    */
   fastify.get('/health', async (_request, reply) => {
     const memoryUsage = process.memoryUsage();
     const totalMemory = memoryUsage.heapTotal;
     const usedMemory = memoryUsage.heapUsed;
 
+    // Check database connection
+    let dbStatus: 'connected' | 'disconnected' = 'disconnected';
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      dbStatus = 'connected';
+    } catch {
+      dbStatus = 'disconnected';
+    }
+
+    const isHealthy = dbStatus === 'connected';
+
     const healthData: HealthCheckResponse = {
-      status: 'healthy',
+      status: isHealthy ? 'healthy' : 'degraded',
       version: process.env.npm_package_version || '0.0.1',
       timestamp: new Date().toISOString(),
       uptime: Math.floor((Date.now() - startTime) / 1000),
       checks: {
-        // Database check will be added later
+        database: dbStatus,
         memory: {
           used: usedMemory,
           total: totalMemory,
@@ -30,7 +42,8 @@ const healthRoutes: FastifyPluginAsync = async fastify => {
       },
     };
 
-    return reply.send(successResponse(healthData));
+    const statusCode = isHealthy ? 200 : 503;
+    return reply.status(statusCode).send(successResponse(healthData));
   });
 
   /**
@@ -38,14 +51,12 @@ const healthRoutes: FastifyPluginAsync = async fastify => {
    * Readiness check - is the server ready to accept requests?
    */
   fastify.get('/health/ready', async (_request, reply) => {
-    // Add checks for dependencies (database, cache, etc.)
-    const isReady = true; // Will add actual checks later
-
-    if (isReady) {
+    try {
+      await prisma.$queryRaw`SELECT 1`;
       return reply.send(successResponse({ ready: true }));
+    } catch {
+      return reply.status(503).send(successResponse({ ready: false }));
     }
-
-    return reply.status(503).send(successResponse({ ready: false }));
   });
 
   /**

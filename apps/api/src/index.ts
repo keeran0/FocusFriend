@@ -3,6 +3,7 @@ import { env } from './config/env.js';
 import { registerMiddleware } from './middleware/index.js';
 import routes from './routes/index.js';
 import healthRoutes from './routes/health.js';
+import { prisma, disconnectPrisma } from './lib/prisma.js';
 
 // Create Fastify instance
 const fastify = Fastify({
@@ -25,10 +26,15 @@ const fastify = Fastify({
 // Bootstrap the application
 async function bootstrap(): Promise<void> {
   try {
+    // Test database connection
+    await prisma.$connect();
+    // eslint-disable-next-line no-console
+    console.log('✓ Database connected');
+
     // Register middleware
     await registerMiddleware(fastify);
 
-    // Register health routes at ROOT level (no prefix) for load balancers
+    // Register health routes at ROOT level (no prefix)
     await fastify.register(healthRoutes);
 
     // Register API routes with prefix
@@ -71,8 +77,9 @@ const gracefulShutdown = async (signal: string): Promise<void> => {
 
   try {
     await fastify.close();
+    await disconnectPrisma();
     // eslint-disable-next-line no-console
-    console.log('Server closed successfully');
+    console.log('Server and database connections closed');
     process.exit(0);
   } catch (error) {
     // eslint-disable-next-line no-console
