@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { ActivityStatus } from './components/ActivityStatus';
 
 function App() {
   const [platform, setPlatform] = useState<string>('');
@@ -18,15 +19,6 @@ function App() {
     return () => clearInterval(timer);
   }, []);
 
-  const handleTestNotification = () => {
-    if (window.electronAPI) {
-      window.electronAPI.showNotification(
-        'Focus Friend',
-        'Your notification system is working! 🎉'
-      );
-    }
-  };
-
   return (
     <div className="app">
       <header className="app-header">
@@ -35,45 +27,40 @@ function App() {
       </header>
 
       <main className="app-main">
-        <div className="status-card">
-          <h2>System Status</h2>
-          <div className="status-grid">
-            <div className="status-item">
-              <span className="label">Platform</span>
-              <span className="value">{platform || 'Loading...'}</span>
-            </div>
-            <div className="status-item">
-              <span className="label">Current Time</span>
-              <span className="value">{currentTime || 'Loading...'}</span>
-            </div>
-            <div className="status-item">
-              <span className="label">Status</span>
-              <span className="value status-active">● Active</span>
-            </div>
-          </div>
+        {/* Activity Status - Main Feature */}
+        <div className="main-card">
+          <ActivityStatus showDetails={true} />
         </div>
 
-        <div className="action-card">
-          <h2>Quick Actions</h2>
-          <div className="button-group">
-            <button className="btn btn-primary" onClick={handleTestNotification}>
-              Test Notification
-            </button>
-            <button className="btn btn-secondary" disabled>
-              Start Focus Session
-            </button>
+        {/* System Info */}
+        <div className="side-cards">
+          <div className="status-card">
+            <h2>System Status</h2>
+            <div className="status-grid">
+              <div className="status-item">
+                <span className="label">Platform</span>
+                <span className="value">{platform || 'Loading...'}</span>
+              </div>
+              <div className="status-item">
+                <span className="label">Current Time</span>
+                <span className="value">{currentTime || 'Loading...'}</span>
+              </div>
+              <div className="status-item">
+                <span className="label">Status</span>
+                <span className="value status-active">● Connected</span>
+              </div>
+            </div>
           </div>
-        </div>
 
-        <div className="info-card">
-          <h2>Coming Soon</h2>
-          <ul>
-            <li>🕐 Activity monitoring</li>
-            <li>🔔 Smart nudges</li>
-            <li>📊 Focus dashboard</li>
-            <li>🏆 Achievements & streaks</li>
-            <li>👥 Social accountability</li>
-          </ul>
+          <div className="info-card">
+            <h2>Quick Tips</h2>
+            <ul>
+              <li>🎯 Start a session to track focus</li>
+              <li>⏱️ Idle detection after 2 minutes</li>
+              <li>🔔 Get nudges when distracted</li>
+              <li>📊 Track your focus score</li>
+            </ul>
+          </div>
         </div>
       </main>
 
