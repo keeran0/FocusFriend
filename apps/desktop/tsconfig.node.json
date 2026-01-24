@@ -9,5 +9,5 @@
     "outDir": "dist/main",
     "skipLibCheck": true
   },
-  "include": ["src/main", "src/preload", "vite.config.ts"]
+  "include": ["src/main", "src/preload", "vite.config.ts", "src/shared/**/*"]
 }

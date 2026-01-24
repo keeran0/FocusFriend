@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { ActivityConfig, ActivityStats, ActivityState } from '../shared/types/activity.js';
 
 // Type definitions for the exposed API
 export interface ElectronAPI {
@@ -14,10 +15,21 @@ export interface ElectronAPI {
   // Notifications
   showNotification: (title: string, body: string) => void;
 
-  // IPC communication
-  send: (channel: string, data: unknown) => void;
-  receive: (channel: string, callback: (data: unknown) => void) => void;
-  invoke: (channel: string, data?: unknown) => Promise<unknown>;
+  // Activity monitoring
+  activity: {
+    startMonitoring: () => Promise<{ success: boolean }>;
+    stopMonitoring: () => Promise<{ success: boolean }>;
+    startSession: () => Promise<{ success: boolean }>;
+    endSession: () => Promise<ActivityStats>;
+    getState: () => Promise<ActivityState>;
+    getStats: () => Promise<ActivityStats>;
+    updateConfig: (config: Partial<ActivityConfig>) => Promise<{ success: boolean }>;
+    getIdleTime: () => Promise<number>;
+    onActivityUpdate: (callback: (state: ActivityState) => void) => () => void;
+    onActivityEvent: (callback: (event: unknown) => void) => () => void;
+    onIdleDetected: (callback: (data: { duration: number }) => void) => () => void;
+    onActivityResumed: (callback: () => void) => () => void;
+  };
 }
 
 // Expose protected methods to the renderer process
@@ -36,24 +48,41 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.send('show-notification', { title, body });
   },
 
-  // Generic IPC methods
-  send: (channel: string, data: unknown) => {
-    const validChannels = ['window-minimize', 'window-maximize', 'window-close'];
-    if (validChannels.includes(channel)) {
-      ipcRenderer.send(channel, data);
-    }
-  },
-  receive: (channel: string, callback: (data: unknown) => void) => {
-    const validChannels = ['focus-reminder', 'session-update'];
-    if (validChannels.includes(channel)) {
-      ipcRenderer.on(channel, (_, data) => callback(data));
-    }
-  },
-  invoke: (channel: string, data?: unknown) => {
-    const validChannels = ['get-app-version', 'get-idle-time', 'start-session'];
-    if (validChannels.includes(channel)) {
-      return ipcRenderer.invoke(channel, data);
-    }
-    return Promise.reject(new Error(`Invalid channel: ${channel}`));
+  // Activity monitoring
+  activity: {
+    startMonitoring: () => ipcRenderer.invoke('activity:start-monitoring'),
+    stopMonitoring: () => ipcRenderer.invoke('activity:stop-monitoring'),
+    startSession: () => ipcRenderer.invoke('activity:start-session'),
+    endSession: () => ipcRenderer.invoke('activity:end-session'),
+    getState: () => ipcRenderer.invoke('activity:get-state'),
+    getStats: () => ipcRenderer.invoke('activity:get-stats'),
+    updateConfig: (config: Partial<ActivityConfig>) =>
+      ipcRenderer.invoke('activity:update-config', config),
+    getIdleTime: () => ipcRenderer.invoke('activity:get-idle-time'),
+
+    // Event listeners with cleanup
+    onActivityUpdate: (callback: (state: ActivityState) => void) => {
+      const handler = (_event: unknown, state: ActivityState) => callback(state);
+      ipcRenderer.on('activity-update', handler);
+      return () => ipcRenderer.removeListener('activity-update', handler);
+    },
+
+    onActivityEvent: (callback: (event: unknown) => void) => {
+      const handler = (_event: unknown, data: unknown) => callback(data);
+      ipcRenderer.on('activity-event', handler);
+      return () => ipcRenderer.removeListener('activity-event', handler);
+    },
+
+    onIdleDetected: (callback: (data: { duration: number }) => void) => {
+      const handler = (_event: unknown, data: { duration: number }) => callback(data);
+      ipcRenderer.on('idle-detected', handler);
+      return () => ipcRenderer.removeListener('idle-detected', handler);
+    },
+
+    onActivityResumed: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('activity-resumed', handler);
+      return () => ipcRenderer.removeListener('activity-resumed', handler);
+    },
   },
 } satisfies ElectronAPI);
