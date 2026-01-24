@@ -20,7 +20,7 @@ export interface HealthCheckResponse {
   timestamp: string;
   uptime: number;
   checks: {
-    database?: 'connected' | 'disconnected';
+    database: 'connected' | 'disconnected';
     memory: {
       used: number;
       total: number;
@@ -49,3 +49,6 @@ export interface PaginatedResponse<T> {
     hasPrevious: boolean;
   };
 }
+
+// Re-export auth types
+export * from './auth.js';
