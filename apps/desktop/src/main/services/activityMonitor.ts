@@ -35,13 +35,17 @@ export class ActivityMonitor extends EventEmitter {
   private currentStreakStart: Date = new Date();
   private currentStreakType: 'active' | 'idle' = 'active';
 
+  // CRITICAL: Track if we've already fired the idle-threshold event this idle period
+  private hasEmittedIdleThreshold: boolean = false;
+
   constructor(config: Partial<ActivityConfig> = {}) {
     super();
     this.config = {
-      idleThreshold: config.idleThreshold ?? 120,
+      idleThreshold: config.idleThreshold ?? 30, // 30 seconds for testing
       pollInterval: config.pollInterval ?? 1000,
       trackWindows: config.trackWindows ?? true,
     };
+    console.log('[ActivityMonitor] Initialized with config:', this.config);
   }
 
   /**
@@ -52,8 +56,10 @@ export class ActivityMonitor extends EventEmitter {
       return;
     }
 
+    console.log('[ActivityMonitor] Starting monitoring');
     this.isMonitoring = true;
     this.state.lastActivityTime = new Date();
+    this.hasEmittedIdleThreshold = false;
 
     // Start polling
     this.pollTimer = setInterval(() => {
@@ -71,12 +77,14 @@ export class ActivityMonitor extends EventEmitter {
       return;
     }
 
+    console.log('[ActivityMonitor] Stopping monitoring');
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
 
     this.isMonitoring = false;
+    this.hasEmittedIdleThreshold = false;
     this.emit('monitoring-stopped');
   }
 
@@ -84,11 +92,14 @@ export class ActivityMonitor extends EventEmitter {
    * Start a focus session
    */
   startSession(): void {
+    console.log('[ActivityMonitor] Starting session');
     this.sessionActive = true;
     this.state.sessionActive = true;
+    this.state.isIdle = false;
     this.stats = this.createEmptyStats();
     this.currentStreakStart = new Date();
     this.currentStreakType = 'active';
+    this.hasEmittedIdleThreshold = false;
 
     this.emitEvent('session-start');
 
@@ -102,6 +113,7 @@ export class ActivityMonitor extends EventEmitter {
    * End a focus session
    */
   endSession(): ActivityStats {
+    console.log('[ActivityMonitor] Ending session');
     this.sessionActive = false;
     this.state.sessionActive = false;
 
@@ -114,6 +126,7 @@ export class ActivityMonitor extends EventEmitter {
     this.emitEvent('session-end', { stats: this.stats });
 
     const finalStats = { ...this.stats };
+    this.hasEmittedIdleThreshold = false;
     return finalStats;
   }
 
@@ -135,27 +148,57 @@ export class ActivityMonitor extends EventEmitter {
    * Update configuration
    */
   updateConfig(config: Partial<ActivityConfig>): void {
+    console.log('[ActivityMonitor] Updating config:', config);
     this.config = { ...this.config, ...config };
   }
 
   /**
-   * Check current activity status
+   * Check current activity status - called every pollInterval
    */
   private checkActivity(): void {
     const idleSeconds = powerMonitor.getSystemIdleTime();
     const wasIdle = this.state.isIdle;
     const isNowIdle = idleSeconds >= this.config.idleThreshold;
 
-    // Update state
+    // Update idle duration in state
     this.state.idleDuration = idleSeconds;
 
-    // Detect state change
+    // STATE TRANSITION: Active -> Idle
     if (!wasIdle && isNowIdle) {
-      // User became idle
-      this.onBecameIdle();
-    } else if (wasIdle && !isNowIdle) {
-      // User became active
-      this.onBecameActive();
+      console.log(`[ActivityMonitor] State change: ACTIVE -> IDLE (after ${idleSeconds}s)`);
+      this.state.isIdle = true;
+
+      // Finalize active streak
+      this.finalizeStreak();
+      this.currentStreakStart = new Date();
+      this.currentStreakType = 'idle';
+
+      // Emit activity-stop
+      this.emitEvent('activity-stop');
+
+      // Emit idle-threshold ONLY ONCE per idle period
+      if (!this.hasEmittedIdleThreshold) {
+        console.log('[ActivityMonitor] Emitting idle-threshold (ONE TIME)');
+        this.hasEmittedIdleThreshold = true;
+        this.emitEvent('idle-threshold', { idleDuration: idleSeconds });
+      }
+    }
+    // STATE TRANSITION: Idle -> Active
+    else if (wasIdle && !isNowIdle) {
+      console.log(`[ActivityMonitor] State change: IDLE -> ACTIVE`);
+      this.state.isIdle = false;
+      this.state.lastActivityTime = new Date();
+
+      // Reset the flag so we can emit again on next idle period
+      this.hasEmittedIdleThreshold = false;
+
+      // Finalize idle streak
+      this.finalizeStreak();
+      this.currentStreakStart = new Date();
+      this.currentStreakType = 'active';
+
+      // Emit activity-start
+      this.emitEvent('activity-start');
     }
 
     // Update session stats if session is active
@@ -163,55 +206,15 @@ export class ActivityMonitor extends EventEmitter {
       this.updateSessionStats(isNowIdle);
     }
 
-    // Emit periodic update
-    this.emit('activity-update', this.state);
-  }
-
-  /**
-   * Handle user becoming idle
-   */
-  private onBecameIdle(): void {
-    this.state.isIdle = true;
-
-    // Finalize active streak
-    this.finalizeStreak();
-    this.currentStreakStart = new Date();
-    this.currentStreakType = 'idle';
-
-    this.emitEvent('activity-stop');
-    this.emitEvent('idle-threshold', {
-      idleDuration: this.state.idleDuration,
-    });
-
-    // Notify renderer to show nudge
-    this.notifyRenderer('idle-detected', {
-      duration: this.state.idleDuration,
-    });
-  }
-
-  /**
-   * Handle user becoming active
-   */
-  private onBecameActive(): void {
-    this.state.isIdle = false;
-    this.state.lastActivityTime = new Date();
-
-    // Finalize idle streak
-    this.finalizeStreak();
-    this.currentStreakStart = new Date();
-    this.currentStreakType = 'active';
-
-    this.emitEvent('activity-start');
-
-    // Notify renderer
-    this.notifyRenderer('activity-resumed', {});
+    // Always emit activity-update for UI updates
+    this.emit('activity-update', { ...this.state });
   }
 
   /**
    * Update session statistics
    */
   private updateSessionStats(isIdle: boolean): void {
-    const increment = this.config.pollInterval / 1000; // Convert to seconds
+    const increment = this.config.pollInterval / 1000;
 
     this.stats.totalTime += increment;
 
@@ -221,7 +224,6 @@ export class ActivityMonitor extends EventEmitter {
       this.stats.activeTime += increment;
     }
 
-    // Update focus score periodically
     this.stats.focusScore = this.calculateFocusScore();
   }
 
@@ -270,18 +272,6 @@ export class ActivityMonitor extends EventEmitter {
   }
 
   /**
-   * Send notification to renderer process
-   */
-  private notifyRenderer(channel: string, data: Record<string, unknown>): void {
-    const windows = BrowserWindow.getAllWindows();
-    windows.forEach(window => {
-      if (!window.isDestroyed()) {
-        window.webContents.send(channel, data);
-      }
-    });
-  }
-
-  /**
    * Create empty stats object
    */
   private createEmptyStats(): ActivityStats {
@@ -303,6 +293,9 @@ let activityMonitor: ActivityMonitor | null = null;
 export function getActivityMonitor(config?: Partial<ActivityConfig>): ActivityMonitor {
   if (!activityMonitor) {
     activityMonitor = new ActivityMonitor(config);
+  } else if (config) {
+    // Update config if provided
+    activityMonitor.updateConfig(config);
   }
   return activityMonitor;
 }

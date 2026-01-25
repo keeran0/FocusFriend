@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { ActivityConfig, ActivityStats, ActivityState } from '../shared/types/activity.js';
+import type { NudgeConfig, Nudge, NudgeEvent } from '../shared/types/nudge.js';
 
 // Type definitions for the exposed API
 export interface ElectronAPI {
@@ -30,6 +31,17 @@ export interface ElectronAPI {
     onIdleDetected: (callback: (data: { duration: number }) => void) => () => void;
     onActivityResumed: (callback: () => void) => () => void;
   };
+
+  // Nudge system
+  nudge: {
+    updateConfig: (config: Partial<NudgeConfig>) => Promise<{ success: boolean }>;
+    acknowledge: (nudgeId: string) => Promise<{ success: boolean }>;
+    getHistory: () => Promise<Nudge[]>;
+    setStreak: (streak: number) => Promise<{ success: boolean }>;
+    triggerTest: (type: string) => Promise<{ success: boolean }>;
+    onNudgeReceived: (callback: (event: NudgeEvent) => void) => () => void;
+    onNudgeAcknowledged: (callback: (nudge: Nudge) => void) => () => void;
+  };
 }
 
 // Expose protected methods to the renderer process
@@ -59,30 +71,45 @@ contextBridge.exposeInMainWorld('electronAPI', {
     updateConfig: (config: Partial<ActivityConfig>) =>
       ipcRenderer.invoke('activity:update-config', config),
     getIdleTime: () => ipcRenderer.invoke('activity:get-idle-time'),
-
-    // Event listeners with cleanup
     onActivityUpdate: (callback: (state: ActivityState) => void) => {
       const handler = (_event: unknown, state: ActivityState) => callback(state);
       ipcRenderer.on('activity-update', handler);
       return () => ipcRenderer.removeListener('activity-update', handler);
     },
-
     onActivityEvent: (callback: (event: unknown) => void) => {
       const handler = (_event: unknown, data: unknown) => callback(data);
       ipcRenderer.on('activity-event', handler);
       return () => ipcRenderer.removeListener('activity-event', handler);
     },
-
     onIdleDetected: (callback: (data: { duration: number }) => void) => {
       const handler = (_event: unknown, data: { duration: number }) => callback(data);
       ipcRenderer.on('idle-detected', handler);
       return () => ipcRenderer.removeListener('idle-detected', handler);
     },
-
     onActivityResumed: (callback: () => void) => {
       const handler = () => callback();
       ipcRenderer.on('activity-resumed', handler);
       return () => ipcRenderer.removeListener('activity-resumed', handler);
+    },
+  },
+
+  // Nudge system
+  nudge: {
+    updateConfig: (config: Partial<NudgeConfig>) =>
+      ipcRenderer.invoke('nudge:update-config', config),
+    acknowledge: (nudgeId: string) => ipcRenderer.invoke('nudge:acknowledge', nudgeId),
+    getHistory: () => ipcRenderer.invoke('nudge:get-history'),
+    setStreak: (streak: number) => ipcRenderer.invoke('nudge:set-streak', streak),
+    triggerTest: (type: string) => ipcRenderer.invoke('nudge:trigger-test', type),
+    onNudgeReceived: (callback: (event: NudgeEvent) => void) => {
+      const handler = (_event: unknown, data: NudgeEvent) => callback(data);
+      ipcRenderer.on('nudge-received', handler);
+      return () => ipcRenderer.removeListener('nudge-received', handler);
+    },
+    onNudgeAcknowledged: (callback: (nudge: Nudge) => void) => {
+      const handler = (_event: unknown, nudge: Nudge) => callback(nudge);
+      ipcRenderer.on('nudge-acknowledged', handler);
+      return () => ipcRenderer.removeListener('nudge-acknowledged', handler);
     },
   },
 } satisfies ElectronAPI);

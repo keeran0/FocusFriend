@@ -3,7 +3,7 @@
  * Displays current activity state and session statistics
  */
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useActivity } from '../hooks/useActivity';
 
 interface ActivityStatusProps {
@@ -12,28 +12,59 @@ interface ActivityStatusProps {
 
 export function ActivityStatus({ showDetails = true }: ActivityStatusProps) {
   const { state, stats, isMonitoring, isSessionActive, startSession, endSession, formatIdleTime } =
-    useActivity({ autoStart: true, idleThreshold: 120 });
+    useActivity({ autoStart: true, idleThreshold: 30 }); // 30s for testing
 
-  // Show notification when idle threshold is reached
+  // Track if we've already shown the idle notification THIS idle period
+  const hasShownIdleNotification = useRef(false);
+  // Track previous idle state to detect transitions
+  const wasIdle = useRef(false);
+
+  // Show notification ONLY ONCE when transitioning from active to idle
   useEffect(() => {
-    if (state?.isIdle && isSessionActive && window.electronAPI) {
-      window.electronAPI.showNotification(
+    if (!state || !isSessionActive) {
+      return;
+    }
+
+    const isCurrentlyIdle = state.isIdle;
+
+    // Detect transition: was active, now idle
+    if (!wasIdle.current && isCurrentlyIdle && !hasShownIdleNotification.current) {
+      console.log('[ActivityStatus] Showing idle notification (ONE TIME)');
+      hasShownIdleNotification.current = true;
+
+      window.electronAPI?.showNotification(
         '👋 Are you still there?',
         `You've been idle for ${formatIdleTime(state.idleDuration)}. Time to refocus!`
       );
     }
-  }, [state?.isIdle, isSessionActive, state?.idleDuration, formatIdleTime]);
+
+    // Reset notification flag when user becomes active again
+    if (wasIdle.current && !isCurrentlyIdle) {
+      console.log('[ActivityStatus] User active again, resetting notification flag');
+      hasShownIdleNotification.current = false;
+    }
+
+    // Update previous state
+    wasIdle.current = isCurrentlyIdle;
+  }, [state?.isIdle, isSessionActive]); // Only trigger on isIdle changes, not every state update
 
   const handleToggleSession = async () => {
     if (isSessionActive) {
       const finalStats = await endSession();
       if (finalStats) {
+        // Reset notification tracking
+        hasShownIdleNotification.current = false;
+        wasIdle.current = false;
+
         window.electronAPI?.showNotification(
           '🎉 Session Complete!',
           `Focus Score: ${finalStats.focusScore}% | Active: ${formatIdleTime(finalStats.activeTime)}`
         );
       }
     } else {
+      // Reset notification tracking when starting new session
+      hasShownIdleNotification.current = false;
+      wasIdle.current = false;
       await startSession();
     }
   };
@@ -75,9 +106,19 @@ export function ActivityStatus({ showDetails = true }: ActivityStatusProps) {
           <h3>Session Statistics</h3>
 
           <div className="focus-score">
-            <div className="score-circle">
-              <span className="score-value">{stats.focusScore}</span>
-              <span className="score-label">%</span>
+            <div
+              className="score-circle"
+              style={{
+                background: `conic-gradient(
+                  var(--color-accent) ${stats.focusScore * 3.6}deg,
+                  var(--color-bg-secondary) ${stats.focusScore * 3.6}deg
+                )`,
+              }}
+            >
+              <div className="score-inner">
+                <span className="score-value">{stats.focusScore}</span>
+                <span className="score-label">%</span>
+              </div>
             </div>
             <span className="score-title">Focus Score</span>
           </div>
@@ -85,20 +126,28 @@ export function ActivityStatus({ showDetails = true }: ActivityStatusProps) {
           <div className="stats-grid">
             <div className="stat-item">
               <span className="stat-label">Total Time</span>
-              <span className="stat-value">{formatIdleTime(stats.totalTime)}</span>
+              <span className="stat-value">{formatIdleTime(Math.round(stats.totalTime))}</span>
             </div>
-            <div className="stat-item">
+            <div className="stat-item active">
               <span className="stat-label">Active Time</span>
-              <span className="stat-value">{formatIdleTime(stats.activeTime)}</span>
+              <span className="stat-value">{formatIdleTime(Math.round(stats.activeTime))}</span>
             </div>
-            <div className="stat-item">
+            <div className="stat-item idle">
               <span className="stat-label">Idle Time</span>
-              <span className="stat-value">{formatIdleTime(stats.idleTime)}</span>
+              <span className="stat-value">{formatIdleTime(Math.round(stats.idleTime))}</span>
             </div>
             <div className="stat-item">
               <span className="stat-label">Idle Events</span>
               <span className="stat-value">{stats.idleEvents}</span>
             </div>
+          </div>
+
+          {/* Debug info - remove in production */}
+          <div className="debug-info">
+            <small>
+              Active: {Math.round(stats.activeTime)}s | Idle: {Math.round(stats.idleTime)}s | Score:{' '}
+              {Math.round((stats.activeTime / Math.max(1, stats.totalTime)) * 100)}%
+            </small>
           </div>
         </div>
       )}
@@ -196,14 +245,23 @@ export function ActivityStatus({ showDetails = true }: ActivityStatusProps) {
         }
 
         .score-circle {
-          width: 80px;
-          height: 80px;
+          width: 100px;
+          height: 100px;
           border-radius: 50%;
-          background: linear-gradient(135deg, var(--color-accent), var(--color-accent-hover));
           display: flex;
           align-items: center;
           justify-content: center;
-          color: white;
+          position: relative;
+        }
+
+        .score-inner {
+          width: 80px;
+          height: 80px;
+          border-radius: 50%;
+          background: var(--color-bg-card);
+          display: flex;
+          align-items: center;
+          justify-content: center;
         }
 
         .score-value {
@@ -236,6 +294,14 @@ export function ActivityStatus({ showDetails = true }: ActivityStatusProps) {
           border-radius: var(--radius-md);
         }
 
+        .stat-item.active {
+          border-left: 3px solid var(--color-success);
+        }
+
+        .stat-item.idle {
+          border-left: 3px solid var(--color-accent);
+        }
+
         .stat-label {
           font-size: var(--font-size-sm);
           color: var(--color-text-secondary);
@@ -253,6 +319,15 @@ export function ActivityStatus({ showDetails = true }: ActivityStatusProps) {
 
         .btn-danger:hover {
           background-color: #dc2626;
+        }
+
+        .debug-info {
+          margin-top: var(--spacing-md);
+          padding: var(--spacing-sm);
+          background: var(--color-bg-secondary);
+          border-radius: var(--radius-sm);
+          text-align: center;
+          color: var(--color-text-secondary);
         }
       `}</style>
     </div>
