@@ -2,7 +2,9 @@ import { app, BrowserWindow, ipcMain, Notification } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { registerActivityHandlers } from './ipc/activityHandlers.js';
+import { registerNudgeHandlers } from './ipc/nudgeHandlers.js';
 import { getActivityMonitor, destroyActivityMonitor } from './services/activityMonitor.js';
+import { getNudgeService, destroyNudgeService } from './services/nudgeService.js';
 
 // ES Module equivalent of __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -15,7 +17,6 @@ let mainWindow: BrowserWindow | null = null;
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
 function createWindow(): void {
-  // Create the browser window
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -30,7 +31,6 @@ function createWindow(): void {
     backgroundColor: '#1a1a2e',
   });
 
-  // Load the app
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
     mainWindow.webContents.openDevTools();
@@ -38,32 +38,76 @@ function createWindow(): void {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
 
-  // Show window when ready
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show();
   });
 
-  // Clean up on close
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 }
 
-// Initialize activity monitor and set up event forwarding
-function initializeActivityMonitor(): void {
-  const monitor = getActivityMonitor();
+// Initialize services and wire them together
+function initializeServices(): void {
+  const activityMonitor = getActivityMonitor({
+    idleThreshold: 30, // 30 seconds for testing
+  });
+  const nudgeService = getNudgeService();
 
-  // Forward activity events to renderer
-  monitor.on('activity-event', event => {
+  // Track if we've notified nudge service about current idle state
+  let nudgeServiceNotifiedIdle = false;
+
+  // Listen for activity events from the monitor
+  activityMonitor.on('activity-event', event => {
+    console.log('[Main] Activity event:', event.type);
+
+    // Forward to renderer
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('activity-event', event);
     }
+
+    // Handle session events
+    if (event.type === 'session-start') {
+      nudgeService.startSession(Date.now().toString());
+      nudgeServiceNotifiedIdle = false;
+    } else if (event.type === 'session-end') {
+      nudgeService.endSession();
+      nudgeServiceNotifiedIdle = false;
+    }
+
+    // Handle idle threshold - ONLY notify nudge service ONCE
+    if (event.type === 'idle-threshold' && !nudgeServiceNotifiedIdle) {
+      console.log('[Main] Notifying nudge service: idle started');
+      nudgeServiceNotifiedIdle = true;
+      nudgeService.onIdleStart();
+    }
+
+    // Handle activity resumed
+    if (event.type === 'activity-start' && nudgeServiceNotifiedIdle) {
+      console.log('[Main] Notifying nudge service: idle ended');
+      nudgeServiceNotifiedIdle = false;
+      nudgeService.onIdleEnd();
+    }
   });
 
-  // Forward activity updates to renderer
-  monitor.on('activity-update', state => {
+  // Forward activity updates to renderer (for UI)
+  activityMonitor.on('activity-update', state => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('activity-update', state);
+    }
+  });
+
+  // Forward nudge events to renderer
+  nudgeService.on('nudge', nudgeEvent => {
+    console.log('[Main] Nudge event:', nudgeEvent.nudge.type);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('nudge-received', nudgeEvent);
+    }
+  });
+
+  nudgeService.on('nudge-acknowledged', nudge => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('nudge-acknowledged', nudge);
     }
   });
 }
@@ -95,11 +139,12 @@ ipcMain.on('show-notification', (_, { title, body }) => {
 
 // App lifecycle
 app.whenReady().then(() => {
-  // Register activity IPC handlers
+  // Register IPC handlers
   registerActivityHandlers();
+  registerNudgeHandlers();
 
-  // Initialize activity monitor
-  initializeActivityMonitor();
+  // Initialize and connect services
+  initializeServices();
 
   // Create window
   createWindow();
@@ -118,11 +163,10 @@ app.on('window-all-closed', () => {
 });
 
 app.on('will-quit', () => {
-  // Clean up activity monitor
   destroyActivityMonitor();
+  destroyNudgeService();
 });
 
-// Security: prevent new window creation
 app.on('web-contents-created', (_, contents) => {
   contents.setWindowOpenHandler(() => {
     return { action: 'deny' };
