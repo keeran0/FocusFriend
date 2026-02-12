@@ -1,66 +1,183 @@
 /**
  * Nudge system type definitions
+ *
+ * Timing is based on multiples of the idle threshold:
+ * - Gentle: 2.5x for warning, 5x for auto-pause
+ * - Moderate: 2x for warning, 3x for auto-pause
+ * - Focused: 1x for auto-pause (immediate after idle detected)
  */
 
-// Nudge severity levels
-export type NudgeType = 'gentle' | 'moderate' | 'urgent' | 'motivational' | 'streak_reminder';
+export type NudgeLevel = 1 | 2 | 3;
 
-// Nudge configuration
+export interface NudgeStage {
+  delayMultiplier: number; // Multiplier of idle threshold
+  notification: boolean;
+  sound: boolean;
+  overlay: boolean;
+  autoPause: boolean;
+  message: NudgeMessageType;
+}
+
+export type NudgeMessageType = 'gentle_reminder' | 'check_in' | 'urgent_warning' | 'session_paused';
+
+export interface NudgeLevelConfig {
+  level: NudgeLevel;
+  name: string;
+  description: string;
+  stages: NudgeStage[];
+}
+
 export interface NudgeConfig {
   enabled: boolean;
-  frequency: NudgeFrequency;
+  level: NudgeLevel;
   soundEnabled: boolean;
-  escalationEnabled: boolean;
-  quietHoursStart?: string; // HH:mm format
+  idleThreshold: number;
+  quietHoursEnabled: boolean;
+  quietHoursStart?: string;
   quietHoursEnd?: string;
 }
 
-export type NudgeFrequency = 'gentle' | 'moderate' | 'aggressive';
-
-// Frequency timing (seconds after idle detection)
-export const NUDGE_TIMING: Record<
-  NudgeFrequency,
-  { gentle: number; moderate: number; urgent: number }
-> = {
-  gentle: { gentle: 180, moderate: 300, urgent: 600 }, // 3min, 5min, 10min
-  moderate: { gentle: 120, moderate: 180, urgent: 300 }, // 2min, 3min, 5min
-  aggressive: { gentle: 60, moderate: 120, urgent: 180 }, // 1min, 2min, 3min
-};
-
-// A single nudge instance
 export interface Nudge {
   id: string;
-  type: NudgeType;
+  level: NudgeLevel;
+  stage: number;
   title: string;
   message: string;
   timestamp: Date;
+  notification: boolean;
+  sound: boolean;
+  overlay: boolean;
+  autoPause: boolean;
   acknowledged: boolean;
   acknowledgedAt?: Date;
   sessionId?: string;
 }
 
-// Nudge template for message generation
-export interface NudgeTemplate {
-  type: NudgeType;
-  titles: string[];
-  messages: string[];
-  emoji: string;
-}
-
-// Nudge action (what user can do with a nudge)
-export type NudgeAction = 'dismiss' | 'snooze' | 'end_session' | 'take_break';
-
-// Nudge event emitted to renderer
 export interface NudgeEvent {
   nudge: Nudge;
   showOverlay: boolean;
   playSound: boolean;
+  autoPause: boolean;
 }
 
-// Default nudge configuration
+/**
+ * NUDGE LEVEL CONFIGURATIONS
+ *
+ * Timing uses multipliers of the idle threshold:
+ *
+ * Level 1 (Gentle):
+ * - Stage 1: 0x (immediately when idle detected)
+ * - Stage 2: 2.5x idle threshold
+ * - Stage 3: 5x idle threshold (auto-pause)
+ *
+ * Level 2 (Moderate):
+ * - Stage 1: 0x (immediately when idle detected)
+ * - Stage 2: 2x idle threshold
+ * - Stage 3: 3x idle threshold (auto-pause)
+ *
+ * Level 3 (Focused):
+ * - Stage 1: 0x (immediately when idle detected)
+ * - Stage 2: 1x idle threshold (auto-pause)
+ */
+export const NUDGE_LEVELS: Record<NudgeLevel, NudgeLevelConfig> = {
+  1: {
+    level: 1,
+    name: 'Gentle',
+    description: 'Silent notifications only',
+    stages: [
+      {
+        delayMultiplier: 0,
+        notification: true,
+        sound: false,
+        overlay: false,
+        autoPause: false,
+        message: 'gentle_reminder',
+      },
+      {
+        delayMultiplier: 2.5,
+        notification: true,
+        sound: false,
+        overlay: false,
+        autoPause: false,
+        message: 'check_in',
+      },
+      {
+        delayMultiplier: 5,
+        notification: true,
+        sound: false,
+        overlay: false,
+        autoPause: true,
+        message: 'session_paused',
+      },
+    ],
+  },
+  2: {
+    level: 2,
+    name: 'Moderate',
+    description: 'Sound alerts',
+    stages: [
+      {
+        delayMultiplier: 0,
+        notification: true,
+        sound: true,
+        overlay: false,
+        autoPause: false,
+        message: 'gentle_reminder',
+      },
+      {
+        delayMultiplier: 2,
+        notification: true,
+        sound: true,
+        overlay: false,
+        autoPause: false,
+        message: 'check_in',
+      },
+      {
+        delayMultiplier: 3,
+        notification: true,
+        sound: true,
+        overlay: false,
+        autoPause: true,
+        message: 'session_paused',
+      },
+    ],
+  },
+  3: {
+    level: 3,
+    name: 'Focused',
+    description: 'Popup + sound, quick auto-pause',
+    stages: [
+      {
+        delayMultiplier: 0,
+        notification: true,
+        sound: true,
+        overlay: true,
+        autoPause: false,
+        message: 'urgent_warning',
+      },
+      {
+        delayMultiplier: 1,
+        notification: true,
+        sound: true,
+        overlay: true,
+        autoPause: true,
+        message: 'session_paused',
+      },
+    ],
+  },
+};
+
 export const DEFAULT_NUDGE_CONFIG: NudgeConfig = {
   enabled: true,
-  frequency: 'moderate',
+  level: 2,
   soundEnabled: true,
-  escalationEnabled: true,
+  idleThreshold: 30,
+  quietHoursEnabled: false,
+  quietHoursStart: '22:00',
+  quietHoursEnd: '08:00',
 };
+
+// Helper to calculate actual delay in ms from multiplier
+export function calculateStageDelay(multiplier: number, idleThreshold: number): number {
+  return multiplier * idleThreshold * 1000;
+}

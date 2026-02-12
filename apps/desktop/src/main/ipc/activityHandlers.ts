@@ -1,75 +1,55 @@
 /**
- * IPC handlers for activity monitoring
+ * Activity IPC Handlers
+ * Handles communication between renderer and activity monitor
  */
 
-import { ipcMain, IpcMainInvokeEvent } from 'electron';
+import { ipcMain } from 'electron';
 import { getActivityMonitor } from '../services/activityMonitor.js';
-import type { ActivityConfig, ActivityStats, ActivityState } from '../../shared/types/activity.js';
 
 export function registerActivityHandlers(): void {
   const monitor = getActivityMonitor();
 
-  /**
-   * Start activity monitoring
-   */
+  // Start monitoring
   ipcMain.handle('activity:start-monitoring', () => {
-    monitor.start();
+    monitor.startMonitoring();
     return { success: true };
   });
 
-  /**
-   * Stop activity monitoring
-   */
+  // Stop monitoring
   ipcMain.handle('activity:stop-monitoring', () => {
-    monitor.stop();
+    monitor.stopMonitoring();
     return { success: true };
   });
 
-  /**
-   * Start a focus session
-   */
+  // Start session
   ipcMain.handle('activity:start-session', () => {
     monitor.startSession();
     return { success: true };
   });
 
-  /**
-   * End a focus session and get stats
-   */
-  ipcMain.handle('activity:end-session', (): ActivityStats => {
-    return monitor.endSession();
+  // End session
+  ipcMain.handle('activity:end-session', () => {
+    const stats = monitor.endSession();
+    return stats;
   });
 
-  /**
-   * Get current activity state
-   */
-  ipcMain.handle('activity:get-state', (): ActivityState => {
+  // Get current state
+  ipcMain.handle('activity:get-state', () => {
     return monitor.getState();
   });
 
-  /**
-   * Get current session stats
-   */
-  ipcMain.handle('activity:get-stats', (): ActivityStats => {
+  // Get stats
+  ipcMain.handle('activity:get-stats', () => {
     return monitor.getStats();
   });
 
-  /**
-   * Update activity configuration
-   */
-  ipcMain.handle(
-    'activity:update-config',
-    (_event: IpcMainInvokeEvent, config: Partial<ActivityConfig>) => {
-      monitor.updateConfig(config);
-      return { success: true };
-    }
-  );
-
-  /**
-   * Get system idle time directly
-   */
+  // Get idle time
   ipcMain.handle('activity:get-idle-time', () => {
-    const { powerMonitor } = require('electron');
-    return powerMonitor.getSystemIdleTime();
+    return monitor.getIdleTime();
   });
+
+  // Resume session (already registered in main/index.ts, but adding here for completeness)
+  // Note: This may be registered twice - that's okay, the second registration will be ignored
+
+  console.log('[ActivityHandlers] Registered activity IPC handlers');
 }

@@ -1,175 +1,210 @@
 /**
  * Nudge Overlay Component
- * Full-screen overlay for urgent nudges
+ * Full-screen overlay for focused mode auto-pause
+ * Only shows Resume and End Session options (breaks are automatic)
  */
 
 import { useEffect, useState } from 'react';
-import type { NudgeEvent } from '../../shared/types/nudge';
+import type { Nudge } from '../../shared/types/nudge';
 
 interface NudgeOverlayProps {
-  nudgeEvent: NudgeEvent | null;
-  onDismiss: () => void;
-  onEndSession: () => void;
-  onTakeBreak: () => void;
+  nudge: Nudge;
+  onAction: (action: 'resume' | 'end' | 'pause') => void;
 }
 
-export function NudgeOverlay({
-  nudgeEvent,
-  onDismiss,
-  onEndSession,
-  onTakeBreak,
-}: NudgeOverlayProps) {
+export function NudgeOverlay({ nudge, onAction }: NudgeOverlayProps) {
   const [isVisible, setIsVisible] = useState(false);
+  const [idleTime, setIdleTime] = useState(0);
 
+  // Animate in
   useEffect(() => {
-    if (nudgeEvent?.showOverlay) {
-      setIsVisible(true);
-    }
-  }, [nudgeEvent]);
+    const timer = setTimeout(() => setIsVisible(true), 50);
+    return () => clearTimeout(timer);
+  }, []);
 
-  const handleDismiss = () => {
+  // Track idle time
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setIdleTime(prev => prev + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleAction = (action: 'resume' | 'end' | 'pause') => {
     setIsVisible(false);
-    setTimeout(onDismiss, 300); // Wait for animation
+    setTimeout(() => onAction(action), 200);
   };
 
-  if (!nudgeEvent || !isVisible) {
-    return null;
-  }
-
-  const { nudge } = nudgeEvent;
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    if (mins > 0) {
+      return `${mins}m ${secs}s`;
+    }
+    return `${secs}s`;
+  };
 
   return (
     <div className={`nudge-overlay ${isVisible ? 'visible' : ''}`}>
-      <div className="nudge-modal">
-        <div className="nudge-icon">{nudge.type === 'urgent' ? '🚨' : '⏰'}</div>
+      <div className="overlay-backdrop" />
 
-        <h2 className="nudge-title">{nudge.title}</h2>
-        <p className="nudge-message">{nudge.message}</p>
+      <div className="overlay-content">
+        <div className="overlay-icon">{nudge.stage === 'auto-pause' ? '⏸️' : '👋'}</div>
 
-        <div className="nudge-actions">
-          <button className="btn btn-primary" onClick={handleDismiss}>
-            🎯 Back to Work
+        <h2 className="overlay-title">{nudge.title}</h2>
+        <p className="overlay-message">{nudge.message}</p>
+
+        {idleTime > 0 && <p className="idle-indicator">Idle for {formatTime(idleTime)}</p>}
+
+        <div className="overlay-actions">
+          <button className="overlay-btn primary" onClick={() => handleAction('resume')}>
+            <span className="btn-icon">▶️</span>
+            Resume Focus
           </button>
 
-          <button
-            className="btn btn-secondary"
-            onClick={() => {
-              handleDismiss();
-              onTakeBreak();
-            }}
-          >
-            ☕ Take 5-min Break
-          </button>
-
-          <button
-            className="btn btn-danger"
-            onClick={() => {
-              handleDismiss();
-              onEndSession();
-            }}
-          >
-            ⏹ End Session
+          <button className="overlay-btn secondary" onClick={() => handleAction('end')}>
+            <span className="btn-icon">⏹️</span>
+            End Session
           </button>
         </div>
 
-        <p className="nudge-hint">
-          Press <kbd>Esc</kbd> or <kbd>Space</kbd> to dismiss
-        </p>
+        <p className="overlay-hint">Your session is paused. No focus time is being tracked.</p>
       </div>
 
       <style>{`
         .nudge-overlay {
           position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          background: rgba(0, 0, 0, 0.85);
+          inset: 0;
+          z-index: 9999;
           display: flex;
           align-items: center;
           justify-content: center;
-          z-index: 9999;
           opacity: 0;
           transition: opacity 0.3s ease;
-          backdrop-filter: blur(10px);
         }
 
         .nudge-overlay.visible {
           opacity: 1;
         }
 
-        .nudge-modal {
-          background: var(--color-bg-card);
-          border-radius: var(--radius-lg);
-          padding: var(--spacing-xl);
-          max-width: 500px;
-          width: 90%;
+        .overlay-backdrop {
+          position: absolute;
+          inset: 0;
+          background: rgba(15, 15, 26, 0.95);
+          backdrop-filter: blur(10px);
+        }
+
+        .overlay-content {
+          position: relative;
+          z-index: 1;
           text-align: center;
-          border: 2px solid var(--color-accent);
-          box-shadow: 0 0 60px rgba(233, 69, 96, 0.3);
-          animation: pulse 2s infinite;
+          padding: var(--spacing-2xl);
+          max-width: 480px;
+          width: 90%;
+          background: var(--color-bg-card);
+          border-radius: var(--radius-xl);
+          border: 1px solid var(--color-border);
+          box-shadow: var(--shadow-lg);
+          transform: translateY(20px);
+          animation: slideUp 0.3s ease forwards;
+        }
+
+        @keyframes slideUp {
+          to {
+            transform: translateY(0);
+          }
+        }
+
+        .overlay-icon {
+          font-size: 4rem;
+          margin-bottom: var(--spacing-lg);
+          animation: pulse 2s ease-in-out infinite;
         }
 
         @keyframes pulse {
-          0%, 100% {
-            box-shadow: 0 0 60px rgba(233, 69, 96, 0.3);
-          }
-          50% {
-            box-shadow: 0 0 80px rgba(233, 69, 96, 0.5);
-          }
+          0%, 100% { transform: scale(1); }
+          50% { transform: scale(1.1); }
         }
 
-        .nudge-icon {
-          font-size: 4rem;
+        .overlay-title {
+          font-size: var(--font-size-2xl);
+          font-weight: 700;
           margin-bottom: var(--spacing-md);
-          animation: bounce 1s infinite;
-        }
-
-        @keyframes bounce {
-          0%, 100% {
-            transform: translateY(0);
-          }
-          50% {
-            transform: translateY(-10px);
-          }
-        }
-
-        .nudge-title {
-          font-size: var(--font-size-xl);
-          margin-bottom: var(--spacing-sm);
           color: var(--color-text-primary);
         }
 
-        .nudge-message {
+        .overlay-message {
           font-size: var(--font-size-base);
           color: var(--color-text-secondary);
           margin-bottom: var(--spacing-lg);
           line-height: 1.6;
         }
 
-        .nudge-actions {
+        .idle-indicator {
+          display: inline-block;
+          padding: var(--spacing-xs) var(--spacing-md);
+          background: rgba(251, 191, 36, 0.1);
+          border: 1px solid rgba(251, 191, 36, 0.3);
+          border-radius: var(--radius-lg);
+          color: var(--color-warning);
+          font-size: var(--font-size-sm);
+          font-weight: 500;
+          margin-bottom: var(--spacing-xl);
+          font-variant-numeric: tabular-nums;
+        }
+
+        .overlay-actions {
           display: flex;
           flex-direction: column;
+          gap: var(--spacing-md);
+          margin-bottom: var(--spacing-lg);
+        }
+
+        .overlay-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
           gap: var(--spacing-sm);
-        }
-
-        .nudge-actions .btn {
-          width: 100%;
-          padding: var(--spacing-md);
+          padding: var(--spacing-md) var(--spacing-xl);
+          border: none;
+          border-radius: var(--radius-md);
           font-size: var(--font-size-base);
+          font-weight: 600;
+          cursor: pointer;
+          transition: all var(--transition-fast);
+          width: 100%;
         }
 
-        .nudge-hint {
-          margin-top: var(--spacing-lg);
-          font-size: var(--font-size-sm);
-          color: var(--color-text-secondary);
+        .overlay-btn .btn-icon {
+          font-size: 1.1rem;
         }
 
-        .nudge-hint kbd {
+        .overlay-btn.primary {
+          background: linear-gradient(135deg, #0078d4 0%, #106ebe 100%);
+          color: white;
+          box-shadow: 0 4px 14px rgba(0, 120, 212, 0.4);
+        }
+
+        .overlay-btn.primary:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 6px 20px rgba(0, 120, 212, 0.5);
+        }
+
+        .overlay-btn.secondary {
           background: var(--color-bg-secondary);
-          padding: 2px 6px;
-          border-radius: var(--radius-sm);
-          font-family: monospace;
+          color: var(--color-text-primary);
+          border: 1px solid var(--color-border);
+        }
+
+        .overlay-btn.secondary:hover {
+          background: var(--color-bg-hover);
+          border-color: var(--color-text-secondary);
+        }
+
+        .overlay-hint {
+          font-size: var(--font-size-xs);
+          color: var(--color-text-secondary);
+          opacity: 0.7;
         }
       `}</style>
     </div>

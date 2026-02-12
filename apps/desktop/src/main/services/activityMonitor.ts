@@ -1,281 +1,73 @@
 /**
  * Activity Monitor Service
- * Runs in the main process to detect user idle time and activity
+ * Tracks user activity and idle time using system-level detection
  */
 
-import { powerMonitor, BrowserWindow } from 'electron';
 import { EventEmitter } from 'events';
-import type {
-  ActivityState,
-  ActivityEvent,
-  ActivityConfig,
-  ActivityStats,
-  ActivityEventType,
-} from '../../shared/types/activity.js';
+import { powerMonitor } from 'electron';
 
-export class ActivityMonitor extends EventEmitter {
+// Types
+export interface ActivityState {
+  isIdle: boolean;
+  idleDuration: number;
+  lastActivityTime: Date;
+  activeWindow: { title: string; appName: string; url?: string } | null;
+  sessionActive: boolean;
+  isPaused: boolean;
+}
+
+export interface ActivityStats {
+  totalTime: number;
+  activeTime: number;
+  idleTime: number;
+  idleEvents: number;
+  focusScore: number;
+  longestActiveStreak: number;
+  longestIdleStreak: number;
+}
+
+export interface ActivityConfig {
+  idleThreshold: number; // seconds
+  pollInterval: number; // milliseconds
+  trackWindows: boolean;
+}
+
+export interface ActivityEvent {
+  type: string;
+  timestamp: Date;
+  data?: Record<string, unknown>;
+}
+
+const DEFAULT_CONFIG: ActivityConfig = {
+  idleThreshold: 30, // 30 seconds for testing
+  pollInterval: 1000,
+  trackWindows: true,
+};
+
+class ActivityMonitor extends EventEmitter {
   private config: ActivityConfig;
-  private pollTimer: NodeJS.Timeout | null = null;
-  private isMonitoring: boolean = false;
-  private sessionActive: boolean = false;
-
-  // Current state
-  private state: ActivityState = {
-    isIdle: false,
-    idleDuration: 0,
-    lastActivityTime: new Date(),
-    activeWindow: null,
-    sessionActive: false,
-  };
-
-  // Session statistics
-  private stats: ActivityStats = this.createEmptyStats();
-
-  // Tracking for streaks
-  private currentStreakStart: Date = new Date();
-  private currentStreakType: 'active' | 'idle' = 'active';
-
-  // CRITICAL: Track if we've already fired the idle-threshold event this idle period
-  private hasEmittedIdleThreshold: boolean = false;
+  private state: ActivityState;
+  private stats: ActivityStats;
+  private pollInterval: NodeJS.Timeout | null = null;
+  private isMonitoring = false;
+  private sessionStartTime: Date | null = null;
+  private lastIdleEmitTime = 0;
+  private hasEmittedIdleThreshold = false;
+  private currentActiveStreak = 0;
+  private currentIdleStreak = 0;
 
   constructor(config: Partial<ActivityConfig> = {}) {
     super();
-    this.config = {
-      idleThreshold: config.idleThreshold ?? 30, // 30 seconds for testing
-      pollInterval: config.pollInterval ?? 1000,
-      trackWindows: config.trackWindows ?? true,
+    this.config = { ...DEFAULT_CONFIG, ...config };
+    this.state = {
+      isIdle: false,
+      idleDuration: 0,
+      lastActivityTime: new Date(),
+      activeWindow: null,
+      sessionActive: false,
+      isPaused: false,
     };
-    console.log('[ActivityMonitor] Initialized with config:', this.config);
-  }
-
-  /**
-   * Start monitoring activity
-   */
-  start(): void {
-    if (this.isMonitoring) {
-      return;
-    }
-
-    console.log('[ActivityMonitor] Starting monitoring');
-    this.isMonitoring = true;
-    this.state.lastActivityTime = new Date();
-    this.hasEmittedIdleThreshold = false;
-
-    // Start polling
-    this.pollTimer = setInterval(() => {
-      this.checkActivity();
-    }, this.config.pollInterval);
-
-    this.emit('monitoring-started');
-  }
-
-  /**
-   * Stop monitoring activity
-   */
-  stop(): void {
-    if (!this.isMonitoring) {
-      return;
-    }
-
-    console.log('[ActivityMonitor] Stopping monitoring');
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-    }
-
-    this.isMonitoring = false;
-    this.hasEmittedIdleThreshold = false;
-    this.emit('monitoring-stopped');
-  }
-
-  /**
-   * Start a focus session
-   */
-  startSession(): void {
-    console.log('[ActivityMonitor] Starting session');
-    this.sessionActive = true;
-    this.state.sessionActive = true;
-    this.state.isIdle = false;
-    this.stats = this.createEmptyStats();
-    this.currentStreakStart = new Date();
-    this.currentStreakType = 'active';
-    this.hasEmittedIdleThreshold = false;
-
-    this.emitEvent('session-start');
-
-    // Start monitoring if not already
-    if (!this.isMonitoring) {
-      this.start();
-    }
-  }
-
-  /**
-   * End a focus session
-   */
-  endSession(): ActivityStats {
-    console.log('[ActivityMonitor] Ending session');
-    this.sessionActive = false;
-    this.state.sessionActive = false;
-
-    // Finalize current streak
-    this.finalizeStreak();
-
-    // Calculate final focus score
-    this.stats.focusScore = this.calculateFocusScore();
-
-    this.emitEvent('session-end', { stats: this.stats });
-
-    const finalStats = { ...this.stats };
-    this.hasEmittedIdleThreshold = false;
-    return finalStats;
-  }
-
-  /**
-   * Get current activity state
-   */
-  getState(): ActivityState {
-    return { ...this.state };
-  }
-
-  /**
-   * Get current session statistics
-   */
-  getStats(): ActivityStats {
-    return { ...this.stats };
-  }
-
-  /**
-   * Update configuration
-   */
-  updateConfig(config: Partial<ActivityConfig>): void {
-    console.log('[ActivityMonitor] Updating config:', config);
-    this.config = { ...this.config, ...config };
-  }
-
-  /**
-   * Check current activity status - called every pollInterval
-   */
-  private checkActivity(): void {
-    const idleSeconds = powerMonitor.getSystemIdleTime();
-    const wasIdle = this.state.isIdle;
-    const isNowIdle = idleSeconds >= this.config.idleThreshold;
-
-    // Update idle duration in state
-    this.state.idleDuration = idleSeconds;
-
-    // STATE TRANSITION: Active -> Idle
-    if (!wasIdle && isNowIdle) {
-      console.log(`[ActivityMonitor] State change: ACTIVE -> IDLE (after ${idleSeconds}s)`);
-      this.state.isIdle = true;
-
-      // Finalize active streak
-      this.finalizeStreak();
-      this.currentStreakStart = new Date();
-      this.currentStreakType = 'idle';
-
-      // Emit activity-stop
-      this.emitEvent('activity-stop');
-
-      // Emit idle-threshold ONLY ONCE per idle period
-      if (!this.hasEmittedIdleThreshold) {
-        console.log('[ActivityMonitor] Emitting idle-threshold (ONE TIME)');
-        this.hasEmittedIdleThreshold = true;
-        this.emitEvent('idle-threshold', { idleDuration: idleSeconds });
-      }
-    }
-    // STATE TRANSITION: Idle -> Active
-    else if (wasIdle && !isNowIdle) {
-      console.log(`[ActivityMonitor] State change: IDLE -> ACTIVE`);
-      this.state.isIdle = false;
-      this.state.lastActivityTime = new Date();
-
-      // Reset the flag so we can emit again on next idle period
-      this.hasEmittedIdleThreshold = false;
-
-      // Finalize idle streak
-      this.finalizeStreak();
-      this.currentStreakStart = new Date();
-      this.currentStreakType = 'active';
-
-      // Emit activity-start
-      this.emitEvent('activity-start');
-    }
-
-    // Update session stats if session is active
-    if (this.sessionActive) {
-      this.updateSessionStats(isNowIdle);
-    }
-
-    // Always emit activity-update for UI updates
-    this.emit('activity-update', { ...this.state });
-  }
-
-  /**
-   * Update session statistics
-   */
-  private updateSessionStats(isIdle: boolean): void {
-    const increment = this.config.pollInterval / 1000;
-
-    this.stats.totalTime += increment;
-
-    if (isIdle) {
-      this.stats.idleTime += increment;
-    } else {
-      this.stats.activeTime += increment;
-    }
-
-    this.stats.focusScore = this.calculateFocusScore();
-  }
-
-  /**
-   * Finalize current streak and update stats
-   */
-  private finalizeStreak(): void {
-    const streakDuration = Math.floor((Date.now() - this.currentStreakStart.getTime()) / 1000);
-
-    if (this.currentStreakType === 'active') {
-      if (streakDuration > this.stats.longestActiveStreak) {
-        this.stats.longestActiveStreak = streakDuration;
-      }
-    } else {
-      if (streakDuration > this.stats.longestIdleStreak) {
-        this.stats.longestIdleStreak = streakDuration;
-      }
-      this.stats.idleEvents++;
-    }
-  }
-
-  /**
-   * Calculate focus score (0-100)
-   */
-  private calculateFocusScore(): number {
-    if (this.stats.totalTime === 0) {
-      return 100;
-    }
-
-    const score = Math.round((this.stats.activeTime / this.stats.totalTime) * 100);
-
-    return Math.max(0, Math.min(100, score));
-  }
-
-  /**
-   * Emit an activity event
-   */
-  private emitEvent(type: ActivityEventType, data?: Record<string, unknown>): void {
-    const event: ActivityEvent = {
-      type,
-      timestamp: new Date(),
-      data,
-    };
-
-    this.emit('activity-event', event);
-  }
-
-  /**
-   * Create empty stats object
-   */
-  private createEmptyStats(): ActivityStats {
-    return {
+    this.stats = {
       totalTime: 0,
       activeTime: 0,
       idleTime: 0,
@@ -284,25 +76,240 @@ export class ActivityMonitor extends EventEmitter {
       longestActiveStreak: 0,
       longestIdleStreak: 0,
     };
+
+    console.log('[ActivityMonitor] Initialized with config:', this.config);
+  }
+
+  public startMonitoring(): void {
+    if (this.isMonitoring) return;
+
+    this.isMonitoring = true;
+    this.pollInterval = setInterval(() => this.checkActivity(), this.config.pollInterval);
+
+    this.emitEvent('monitoring-start');
+    console.log('[ActivityMonitor] Starting monitoring');
+  }
+
+  public stopMonitoring(): void {
+    if (!this.isMonitoring) return;
+
+    this.isMonitoring = false;
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval);
+      this.pollInterval = null;
+    }
+
+    this.emitEvent('monitoring-stop');
+    console.log('[ActivityMonitor] Stopping monitoring');
+  }
+
+  public startSession(): void {
+    this.sessionStartTime = new Date();
+    this.state.sessionActive = true;
+    this.state.isPaused = false;
+    this.hasEmittedIdleThreshold = false;
+
+    // Reset stats for new session
+    this.stats = {
+      totalTime: 0,
+      activeTime: 0,
+      idleTime: 0,
+      idleEvents: 0,
+      focusScore: 100,
+      longestActiveStreak: 0,
+      longestIdleStreak: 0,
+    };
+    this.currentActiveStreak = 0;
+    this.currentIdleStreak = 0;
+
+    this.emitEvent('session-start');
+    console.log('[ActivityMonitor] Starting session');
+  }
+
+  public endSession(): ActivityStats {
+    this.state.sessionActive = false;
+    this.state.isPaused = false;
+    this.sessionStartTime = null;
+    this.hasEmittedIdleThreshold = false;
+
+    const finalStats = { ...this.stats };
+    this.emitEvent('session-end', { stats: finalStats });
+    console.log('[ActivityMonitor] Ending session');
+
+    return finalStats;
+  }
+
+  public pauseSession(): void {
+    if (!this.state.sessionActive || this.state.isPaused) {
+      console.log('[ActivityMonitor] Cannot pause - session not active or already paused');
+      return;
+    }
+
+    console.log('[ActivityMonitor] Pausing session');
+    this.state.isPaused = true;
+
+    // Finalize current streak
+    if (this.state.isIdle) {
+      if (this.currentIdleStreak > this.stats.longestIdleStreak) {
+        this.stats.longestIdleStreak = this.currentIdleStreak;
+      }
+    } else {
+      if (this.currentActiveStreak > this.stats.longestActiveStreak) {
+        this.stats.longestActiveStreak = this.currentActiveStreak;
+      }
+    }
+
+    this.emitEvent('session-pause');
+  }
+
+  public resumeSession(): void {
+    if (!this.state.sessionActive || !this.state.isPaused) {
+      console.log('[ActivityMonitor] Cannot resume - session not active or not paused');
+      return;
+    }
+
+    console.log('[ActivityMonitor] Resuming session');
+    this.state.isPaused = false;
+    this.state.isIdle = false;
+    this.state.idleDuration = 0;
+    this.state.lastActivityTime = new Date();
+    this.hasEmittedIdleThreshold = false;
+    this.currentActiveStreak = 0;
+    this.currentIdleStreak = 0;
+
+    this.emitEvent('session-resume');
+  }
+
+  public getState(): ActivityState {
+    return { ...this.state };
+  }
+
+  public getStats(): ActivityStats {
+    return { ...this.stats };
+  }
+
+  public updateConfig(config: Partial<ActivityConfig>): void {
+    this.config = { ...this.config, ...config };
+    this.hasEmittedIdleThreshold = false; // Reset so new threshold takes effect
+    console.log('[ActivityMonitor] Updating config:', config);
+  }
+
+  public getIdleTime(): number {
+    return powerMonitor.getSystemIdleTime();
+  }
+
+  private checkActivity(): void {
+    if (!this.isMonitoring) return;
+
+    // Skip if session is paused
+    if (this.state.isPaused) {
+      this.emit('activity-update', this.getState());
+      return;
+    }
+
+    const systemIdleTime = powerMonitor.getSystemIdleTime();
+    const wasIdle = this.state.isIdle;
+    const isNowIdle = systemIdleTime >= this.config.idleThreshold;
+
+    // Update idle duration
+    if (isNowIdle) {
+      this.state.idleDuration = systemIdleTime;
+    } else {
+      this.state.idleDuration = 0;
+      this.state.lastActivityTime = new Date();
+    }
+
+    // State transition: Active -> Idle
+    if (!wasIdle && isNowIdle) {
+      this.state.isIdle = true;
+      console.log(`[ActivityMonitor] State change: ACTIVE -> IDLE (after ${systemIdleTime}s)`);
+      this.emitEvent('activity-stop');
+
+      // Emit idle-threshold event ONCE per idle period
+      if (!this.hasEmittedIdleThreshold) {
+        console.log('[ActivityMonitor] Emitting idle-threshold (ONE TIME)');
+        this.hasEmittedIdleThreshold = true;
+        this.emitEvent('idle-threshold');
+      }
+
+      // Update streaks
+      if (this.currentActiveStreak > this.stats.longestActiveStreak) {
+        this.stats.longestActiveStreak = this.currentActiveStreak;
+      }
+      this.currentActiveStreak = 0;
+
+      if (this.state.sessionActive) {
+        this.stats.idleEvents++;
+      }
+    }
+
+    // State transition: Idle -> Active
+    if (wasIdle && !isNowIdle) {
+      this.state.isIdle = false;
+      this.hasEmittedIdleThreshold = false; // Reset for next idle period
+      console.log('[ActivityMonitor] State change: IDLE -> ACTIVE');
+      this.emitEvent('activity-start');
+
+      // Update streaks
+      if (this.currentIdleStreak > this.stats.longestIdleStreak) {
+        this.stats.longestIdleStreak = this.currentIdleStreak;
+      }
+      this.currentIdleStreak = 0;
+    }
+
+    // Update session stats
+    if (this.state.sessionActive && !this.state.isPaused) {
+      const deltaSeconds = this.config.pollInterval / 1000;
+      this.stats.totalTime += deltaSeconds;
+
+      if (isNowIdle) {
+        this.stats.idleTime += deltaSeconds;
+        this.currentIdleStreak += deltaSeconds;
+      } else {
+        this.stats.activeTime += deltaSeconds;
+        this.currentActiveStreak += deltaSeconds;
+      }
+
+      // Calculate focus score
+      if (this.stats.totalTime > 0) {
+        this.stats.focusScore = Math.round((this.stats.activeTime / this.stats.totalTime) * 100);
+      }
+    }
+
+    // Emit update
+    this.emit('activity-update', this.getState());
+  }
+
+  private emitEvent(type: string, data?: Record<string, unknown>): void {
+    const event: ActivityEvent = {
+      type,
+      timestamp: new Date(),
+      data,
+    };
+    this.emit('activity-event', event);
+  }
+
+  public destroy(): void {
+    this.stopMonitoring();
+    this.removeAllListeners();
   }
 }
 
 // Singleton instance
-let activityMonitor: ActivityMonitor | null = null;
+let activityMonitorInstance: ActivityMonitor | null = null;
 
 export function getActivityMonitor(config?: Partial<ActivityConfig>): ActivityMonitor {
-  if (!activityMonitor) {
-    activityMonitor = new ActivityMonitor(config);
+  if (!activityMonitorInstance) {
+    activityMonitorInstance = new ActivityMonitor(config);
   } else if (config) {
-    // Update config if provided
-    activityMonitor.updateConfig(config);
+    activityMonitorInstance.updateConfig(config);
   }
-  return activityMonitor;
+  return activityMonitorInstance;
 }
 
 export function destroyActivityMonitor(): void {
-  if (activityMonitor) {
-    activityMonitor.stop();
-    activityMonitor = null;
+  if (activityMonitorInstance) {
+    activityMonitorInstance.destroy();
+    activityMonitorInstance = null;
   }
 }
