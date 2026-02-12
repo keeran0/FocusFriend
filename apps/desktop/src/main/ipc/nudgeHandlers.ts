@@ -10,6 +10,13 @@ export function registerNudgeHandlers(): void {
   const nudgeService = getNudgeService();
 
   /**
+   * Get current nudge configuration
+   */
+  ipcMain.handle('nudge:get-config', () => {
+    return nudgeService.getConfig();
+  });
+
+  /**
    * Update nudge configuration
    */
   ipcMain.handle('nudge:update-config', (_event, config: Partial<NudgeConfig>) => {
@@ -33,30 +40,11 @@ export function registerNudgeHandlers(): void {
   });
 
   /**
-   * Set user streak for streak reminders
+   * Trigger a test nudge
    */
-  ipcMain.handle('nudge:set-streak', (_event, streak: number) => {
-    nudgeService.setUserStreak(streak);
-    return { success: true };
-  });
-
-  /**
-   * Manually trigger a nudge (for testing)
-   */
-  ipcMain.handle('nudge:trigger-test', (_event, type: string) => {
-    // This is just for testing - emit a test nudge event
-    nudgeService.emit('nudge', {
-      nudge: {
-        id: 'test-' + Date.now(),
-        type,
-        title: '🧪 Test Nudge',
-        message: 'This is a test nudge message!',
-        timestamp: new Date(),
-        acknowledged: false,
-      },
-      showOverlay: type === 'urgent',
-      playSound: type !== 'gentle',
-    });
+  ipcMain.handle('nudge:trigger-test', () => {
+    // Manually trigger idle start for testing
+    nudgeService.onIdleStart();
     return { success: true };
   });
 }

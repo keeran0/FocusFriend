@@ -3,37 +3,43 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { ActivityState, ActivityStats } from '../../shared/types/activity';
+
+// Inline type definitions to avoid import issues
+interface ActivityState {
+  isIdle: boolean;
+  idleDuration: number;
+  lastActivityTime: Date;
+  activeWindow: { title: string; appName: string; url?: string } | null;
+  sessionActive: boolean;
+  isPaused?: boolean;
+}
+
+interface ActivityStats {
+  totalTime: number;
+  activeTime: number;
+  idleTime: number;
+  idleEvents: number;
+  focusScore: number;
+  longestActiveStreak: number;
+  longestIdleStreak: number;
+}
 
 interface UseActivityOptions {
   autoStart?: boolean;
-  idleThreshold?: number;
 }
 
 interface UseActivityReturn {
-  // State
   state: ActivityState | null;
   stats: ActivityStats | null;
   isMonitoring: boolean;
   isSessionActive: boolean;
-
-  // Actions
   startMonitoring: () => Promise<void>;
   stopMonitoring: () => Promise<void>;
   startSession: () => Promise<void>;
   endSession: () => Promise<ActivityStats | null>;
-
-  // Helpers
+  resumeSession: () => Promise<void>;
   formatIdleTime: (seconds: number) => string;
 }
-
-const initialState: ActivityState = {
-  isIdle: false,
-  idleDuration: 0,
-  lastActivityTime: new Date(),
-  activeWindow: null,
-  sessionActive: false,
-};
 
 const initialStats: ActivityStats = {
   totalTime: 0,
@@ -46,17 +52,15 @@ const initialStats: ActivityStats = {
 };
 
 export function useActivity(options: UseActivityOptions = {}): UseActivityReturn {
-  const { autoStart = false, idleThreshold = 120 } = options;
+  const { autoStart = false } = options;
 
   const [state, setState] = useState<ActivityState | null>(null);
   const [stats, setStats] = useState<ActivityStats | null>(null);
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [isSessionActive, setIsSessionActive] = useState(false);
 
-  // Track cleanup functions
   const cleanupRef = useRef<(() => void)[]>([]);
 
-  // Initialize and set up listeners
   useEffect(() => {
     if (!window.electronAPI?.activity) {
       console.warn('Activity API not available');
@@ -64,46 +68,36 @@ export function useActivity(options: UseActivityOptions = {}): UseActivityReturn
     }
 
     // Set up activity update listener
-    const cleanupUpdate = window.electronAPI.activity.onActivityUpdate(newState => {
-      setState(newState);
-    });
+    const cleanupUpdate = window.electronAPI.activity.onActivityUpdate(
+      (newState: ActivityState) => {
+        setState(newState);
+      }
+    );
     cleanupRef.current.push(cleanupUpdate);
 
     // Set up activity event listener
-    const cleanupEvent = window.electronAPI.activity.onActivityEvent(event => {
-      console.log('Activity event:', event);
+    const cleanupEvent = window.electronAPI.activity.onActivityEvent((event: { type: string }) => {
+      if (event.type !== 'activity-update') {
+        console.log('[useActivity] Activity event:', event.type);
+      }
     });
     cleanupRef.current.push(cleanupEvent);
 
-    // Set up idle detected listener
-    const cleanupIdle = window.electronAPI.activity.onIdleDetected(data => {
-      console.log('Idle detected:', data.duration, 'seconds');
-    });
-    cleanupRef.current.push(cleanupIdle);
-
-    // Set up activity resumed listener
-    const cleanupResumed = window.electronAPI.activity.onActivityResumed(() => {
-      console.log('Activity resumed');
-    });
-    cleanupRef.current.push(cleanupResumed);
-
-    // Update config with custom idle threshold
-    window.electronAPI.activity.updateConfig({ idleThreshold });
-
     // Auto-start monitoring if requested
     if (autoStart) {
-      startMonitoring();
+      window.electronAPI.activity.startMonitoring().then(() => {
+        setIsMonitoring(true);
+      });
     }
 
     // Get initial state
     window.electronAPI.activity.getState().then(setState);
 
-    // Cleanup on unmount
     return () => {
       cleanupRef.current.forEach(cleanup => cleanup());
       cleanupRef.current = [];
     };
-  }, [autoStart, idleThreshold]);
+  }, [autoStart]);
 
   // Poll for stats updates when session is active
   useEffect(() => {
@@ -121,21 +115,18 @@ export function useActivity(options: UseActivityOptions = {}): UseActivityReturn
 
   const startMonitoring = useCallback(async () => {
     if (!window.electronAPI?.activity) return;
-
     await window.electronAPI.activity.startMonitoring();
     setIsMonitoring(true);
   }, []);
 
   const stopMonitoring = useCallback(async () => {
     if (!window.electronAPI?.activity) return;
-
     await window.electronAPI.activity.stopMonitoring();
     setIsMonitoring(false);
   }, []);
 
   const startSession = useCallback(async () => {
     if (!window.electronAPI?.activity) return;
-
     await window.electronAPI.activity.startSession();
     setIsSessionActive(true);
     setStats(initialStats);
@@ -143,19 +134,23 @@ export function useActivity(options: UseActivityOptions = {}): UseActivityReturn
 
   const endSession = useCallback(async () => {
     if (!window.electronAPI?.activity) return null;
-
     const finalStats = await window.electronAPI.activity.endSession();
     setIsSessionActive(false);
     setStats(finalStats);
     return finalStats;
   }, []);
 
+  const resumeSession = useCallback(async () => {
+    if (!window.electronAPI?.activity) return;
+    await window.electronAPI.activity.resumeSession();
+  }, []);
+
   const formatIdleTime = useCallback((seconds: number): string => {
     if (seconds < 60) {
-      return `${seconds}s`;
+      return `${Math.round(seconds)}s`;
     }
     const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
+    const remainingSeconds = Math.round(seconds % 60);
     return `${minutes}m ${remainingSeconds}s`;
   }, []);
 
@@ -168,6 +163,7 @@ export function useActivity(options: UseActivityOptions = {}): UseActivityReturn
     stopMonitoring,
     startSession,
     endSession,
+    resumeSession,
     formatIdleTime,
   };
 }

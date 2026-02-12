@@ -1,118 +1,136 @@
 /**
  * Nudge Toast Component
- * Non-intrusive notification for gentle/moderate nudges
+ * Slide-in notification for gentle/moderate nudges
  */
 
 import { useEffect, useState } from 'react';
-import type { Nudge } from '../../shared/types/nudge';
 
 interface NudgeToastProps {
-  nudge: Nudge | null;
+  nudge: {
+    id: string;
+    title: string;
+    message: string;
+    level: number;
+  };
   onDismiss: () => void;
-  autoDismissMs?: number;
+  duration?: number;
 }
 
-export function NudgeToast({ nudge, onDismiss, autoDismissMs = 10000 }: NudgeToastProps) {
-  const [isVisible, setIsVisible] = useState(false);
+export function NudgeToast({ nudge, onDismiss, duration = 10000 }: NudgeToastProps) {
   const [progress, setProgress] = useState(100);
+  const [isExiting, setIsExiting] = useState(false);
 
   useEffect(() => {
-    if (nudge) {
-      setIsVisible(true);
-      setProgress(100);
+    const startTime = Date.now();
 
-      // Auto-dismiss timer
-      const dismissTimer = setTimeout(() => {
-        setIsVisible(false);
-        setTimeout(onDismiss, 300);
-      }, autoDismissMs);
+    const interval = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      const remaining = Math.max(0, 100 - (elapsed / duration) * 100);
+      setProgress(remaining);
 
-      // Progress bar animation
-      const startTime = Date.now();
-      const progressInterval = setInterval(() => {
-        const elapsed = Date.now() - startTime;
-        const remaining = Math.max(0, 100 - (elapsed / autoDismissMs) * 100);
-        setProgress(remaining);
-      }, 50);
+      if (remaining <= 0) {
+        handleDismiss();
+      }
+    }, 50);
 
-      return () => {
-        clearTimeout(dismissTimer);
-        clearInterval(progressInterval);
-      };
-    }
-  }, [nudge, autoDismissMs, onDismiss]);
+    return () => clearInterval(interval);
+  }, [duration]);
 
   const handleDismiss = () => {
-    setIsVisible(false);
+    setIsExiting(true);
     setTimeout(onDismiss, 300);
   };
 
-  if (!nudge) {
-    return null;
-  }
-
-  const typeColors: Record<string, string> = {
-    gentle: '#4ade80',
-    moderate: '#fbbf24',
-    urgent: '#ef4444',
-    motivational: '#8b5cf6',
-    streak_reminder: '#f97316',
-  };
-
-  const borderColor = typeColors[nudge.type] || typeColors.moderate;
+  const borderColor =
+    nudge.level === 1
+      ? 'var(--color-success)'
+      : nudge.level === 2
+        ? 'var(--color-accent)'
+        : '#ef4444';
 
   return (
-    <div className={`nudge-toast ${isVisible ? 'visible' : ''}`}>
-      <div className="toast-content" style={{ borderLeftColor: borderColor }}>
+    <div className={`nudge-toast ${isExiting ? 'exiting' : ''}`}>
+      <div className="toast-border" style={{ borderLeftColor: borderColor }} />
+
+      <div className="toast-content">
         <div className="toast-header">
           <span className="toast-title">{nudge.title}</span>
-          <button className="toast-close" onClick={handleDismiss} aria-label="Dismiss">
-            ×
+          <button className="toast-close" onClick={handleDismiss}>
+            ✕
           </button>
         </div>
-
         <p className="toast-message">{nudge.message}</p>
+      </div>
 
-        <div className="toast-progress">
-          <div
-            className="toast-progress-bar"
-            style={{
-              width: `${progress}%`,
-              backgroundColor: borderColor,
-            }}
-          />
-        </div>
+      <div className="toast-progress">
+        <div
+          className="toast-progress-bar"
+          style={{
+            width: `${progress}%`,
+            backgroundColor: borderColor,
+          }}
+        />
       </div>
 
       <style>{`
         .nudge-toast {
           position: fixed;
-          top: var(--spacing-lg);
-          right: var(--spacing-lg);
-          z-index: 1000;
-          transform: translateX(120%);
-          transition: transform 0.3s ease;
+          top: 20px;
+          right: 20px;
+          width: 350px;
+          background: var(--color-bg-card);
+          border-radius: var(--radius-md);
+          box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+          overflow: hidden;
+          z-index: 9998;
+          animation: slideIn 0.3s ease;
         }
 
-        .nudge-toast.visible {
-          transform: translateX(0);
+        .nudge-toast.exiting {
+          animation: slideOut 0.3s ease forwards;
+        }
+
+        @keyframes slideIn {
+          from {
+            transform: translateX(100%);
+            opacity: 0;
+          }
+          to {
+            transform: translateX(0);
+            opacity: 1;
+          }
+        }
+
+        @keyframes slideOut {
+          from {
+            transform: translateX(0);
+            opacity: 1;
+          }
+          to {
+            transform: translateX(100%);
+            opacity: 0;
+          }
+        }
+
+        .toast-border {
+          position: absolute;
+          left: 0;
+          top: 0;
+          bottom: 0;
+          width: 4px;
+          border-left: 4px solid;
         }
 
         .toast-content {
-          background: var(--color-bg-card);
-          border-radius: var(--radius-md);
           padding: var(--spacing-md);
-          min-width: 300px;
-          max-width: 400px;
-          border-left: 4px solid;
-          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+          padding-left: calc(var(--spacing-md) + 4px);
         }
 
         .toast-header {
           display: flex;
           justify-content: space-between;
-          align-items: center;
-          margin-bottom: var(--spacing-sm);
+          align-items: flex-start;
+          margin-bottom: var(--spacing-xs);
         }
 
         .toast-title {
@@ -124,9 +142,9 @@ export function NudgeToast({ nudge, onDismiss, autoDismissMs = 10000 }: NudgeToa
           background: none;
           border: none;
           color: var(--color-text-secondary);
-          font-size: 1.5rem;
           cursor: pointer;
           padding: 0;
+          font-size: var(--font-size-sm);
           line-height: 1;
         }
 
@@ -135,17 +153,15 @@ export function NudgeToast({ nudge, onDismiss, autoDismissMs = 10000 }: NudgeToa
         }
 
         .toast-message {
-          color: var(--color-text-secondary);
+          margin: 0;
           font-size: var(--font-size-sm);
-          margin: 0 0 var(--spacing-sm) 0;
+          color: var(--color-text-secondary);
           line-height: 1.5;
         }
 
         .toast-progress {
           height: 3px;
           background: var(--color-bg-secondary);
-          border-radius: 2px;
-          overflow: hidden;
         }
 
         .toast-progress-bar {
