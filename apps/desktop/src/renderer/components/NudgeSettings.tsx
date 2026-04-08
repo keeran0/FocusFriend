@@ -1,635 +1,658 @@
 /**
- * Nudge Settings Component
- * Configure nudge behavior and idle threshold
+ * NudgeSettings - Final Polished Version
+ * Tutorial 15: Production Polish
+ *
+ * Settings panel with new design system
  */
 
-import { useState, useEffect } from 'react';
-
-type NudgeLevel = 1 | 2 | 3;
+import { useState, useEffect, useCallback } from 'react';
 
 interface NudgeConfig {
   enabled: boolean;
-  level: NudgeLevel;
+  level: number;
   soundEnabled: boolean;
   idleThreshold: number;
   quietHoursEnabled: boolean;
-  quietHoursStart?: string;
-  quietHoursEnd?: string;
+  quietHoursStart: string;
+  quietHoursEnd: string;
 }
 
-// Storage key for settings
-const SETTINGS_KEY = 'focus-friend-settings';
-
-// Level info with multiplier-based timing
-const LEVEL_INFO: Record<
-  NudgeLevel,
-  {
-    name: string;
-    icon: string;
-    description: string;
-    warningMultiplier: number;
-    pauseMultiplier: number;
-  }
-> = {
-  1: {
-    name: 'Gentle',
-    icon: '🌱',
-    description: 'Silent notifications, relaxed timing',
-    warningMultiplier: 2.5,
-    pauseMultiplier: 5,
-  },
-  2: {
-    name: 'Moderate',
-    icon: '⚡',
-    description: 'Sound alerts, balanced timing',
-    warningMultiplier: 2,
-    pauseMultiplier: 3,
-  },
-  3: {
-    name: 'Focused',
-    icon: '🔥',
-    description: 'Popup + sound, quick response',
-    warningMultiplier: 0,
-    pauseMultiplier: 1,
-  },
-};
-
 interface NudgeSettingsProps {
-  onConfigChange: (config: Partial<NudgeConfig>) => void;
+  onConfigChange?: (config: Partial<NudgeConfig>) => void;
 }
 
 const DEFAULT_CONFIG: NudgeConfig = {
   enabled: true,
   level: 2,
   soundEnabled: true,
-  idleThreshold: 30,
+  idleThreshold: 300,
   quietHoursEnabled: false,
   quietHoursStart: '22:00',
   quietHoursEnd: '08:00',
 };
 
-function formatTime(seconds: number): string {
-  if (seconds < 60) {
-    return `${Math.round(seconds)}s`;
-  }
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = Math.round(seconds % 60);
-  if (remainingSeconds === 0) {
-    return `${minutes}m`;
-  }
-  return `${minutes}m ${remainingSeconds}s`;
-}
+const INTENSITY_LEVELS = [
+  { value: 1, label: 'Gentle', description: 'Subtle reminders', icon: '🌊' },
+  { value: 2, label: 'Balanced', description: 'Regular nudges', icon: '⚖️' },
+  { value: 3, label: 'Persistent', description: 'Frequent alerts', icon: '🔔' },
+  { value: 4, label: 'Intense', description: 'Hard to ignore', icon: '⚡' },
+];
 
-function loadSettings(): NudgeConfig {
-  try {
-    const saved = localStorage.getItem(SETTINGS_KEY);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      return { ...DEFAULT_CONFIG, ...parsed };
-    }
-  } catch (e) {
-    console.error('[NudgeSettings] Failed to load settings:', e);
-  }
-  return DEFAULT_CONFIG;
-}
-
-function saveSettings(config: NudgeConfig): void {
-  try {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(config));
-  } catch (e) {
-    console.error('[NudgeSettings] Failed to save settings:', e);
-  }
-}
+const THRESHOLD_OPTIONS = [
+  { value: 60, label: '1 minute' },
+  { value: 180, label: '3 minutes' },
+  { value: 300, label: '5 minutes' },
+  { value: 600, label: '10 minutes' },
+  { value: 900, label: '15 minutes' },
+];
 
 export function NudgeSettings({ onConfigChange }: NudgeSettingsProps) {
-  const [config, setConfig] = useState<NudgeConfig>(() => loadSettings());
+  const [config, setConfig] = useState<NudgeConfig>(DEFAULT_CONFIG);
+  const [hasChanges, setHasChanges] = useState(false);
 
-  // On mount, sync settings to main process
   useEffect(() => {
-    console.log('[NudgeSettings] Loaded settings:', config);
-
-    if (window.electronAPI?.activity?.setIdleThreshold) {
-      window.electronAPI.activity.setIdleThreshold(config.idleThreshold);
-    }
-
-    if (window.electronAPI?.nudge?.updateConfig) {
-      window.electronAPI.nudge.updateConfig(config);
+    try {
+      const saved = localStorage.getItem('focus-friend-nudge-config');
+      if (saved) {
+        setConfig({ ...DEFAULT_CONFIG, ...JSON.parse(saved) });
+      }
+    } catch (e) {
+      console.error('Failed to load nudge config:', e);
     }
   }, []);
 
-  const handleChange = <K extends keyof NudgeConfig>(key: K, value: NudgeConfig[K]) => {
-    const updated = { ...config, [key]: value };
-    setConfig(updated);
-    saveSettings(updated);
-    onConfigChange({ [key]: value });
-
-    if (window.electronAPI?.nudge?.updateConfig) {
-      window.electronAPI.nudge.updateConfig({ [key]: value });
-    }
-  };
-
-  const handleIdleThresholdChange = (threshold: number) => {
-    console.log('[NudgeSettings] Setting idle threshold to:', threshold);
-    const updated = { ...config, idleThreshold: threshold };
-    setConfig(updated);
-    saveSettings(updated);
-    onConfigChange({ idleThreshold: threshold });
-
-    if (window.electronAPI?.activity?.setIdleThreshold) {
-      window.electronAPI.activity.setIdleThreshold(threshold);
-    }
-
-    if (window.electronAPI?.nudge?.updateConfig) {
-      window.electronAPI.nudge.updateConfig({ idleThreshold: threshold });
-    }
-  };
-
-  const levelInfo = LEVEL_INFO[config.level];
-
-  // Calculate times based on multipliers
-  const getWarningTime = (level: NudgeLevel): string => {
-    const info = LEVEL_INFO[level];
-    if (info.warningMultiplier === 0) return 'Immediate';
-    const seconds = config.idleThreshold * info.warningMultiplier;
-    return formatTime(seconds);
-  };
-
-  const getAutoPauseTime = (level: NudgeLevel): string => {
-    const info = LEVEL_INFO[level];
-    const seconds = config.idleThreshold * info.pauseMultiplier;
-    return formatTime(seconds);
-  };
+  const updateConfig = useCallback(
+    (updates: Partial<NudgeConfig>) => {
+      setConfig(prev => {
+        const newConfig = { ...prev, ...updates };
+        localStorage.setItem('focus-friend-nudge-config', JSON.stringify(newConfig));
+        onConfigChange?.(updates);
+        return newConfig;
+      });
+      setHasChanges(true);
+      setTimeout(() => setHasChanges(false), 2000);
+    },
+    [onConfigChange]
+  );
 
   return (
-    <div className="nudge-settings">
-      <div className="settings-header">
-        <h2>⚙️ Focus Settings</h2>
-        <p>Customize how Focus Friend helps you stay on track</p>
-      </div>
-
-      {/* Enable/Disable */}
-      <div className="setting-section">
-        <div className="toggle-setting">
-          <div className="toggle-info">
-            <span className="toggle-label">Enable Nudges</span>
-            <span className="toggle-desc">Get reminders when you're idle</span>
+    <div className="settings-container">
+      <div className="settings-grid">
+        {/* Nudge Settings Card */}
+        <div className="settings-card">
+          <div className="card-header">
+            <div className="card-icon">🔔</div>
+            <div>
+              <h3>Nudge Settings</h3>
+              <p>Configure how Focus Friend keeps you on track</p>
+            </div>
           </div>
-          <label className="switch">
-            <input
-              type="checkbox"
-              checked={config.enabled}
-              onChange={e => handleChange('enabled', e.target.checked)}
-            />
-            <span className="slider"></span>
-          </label>
-        </div>
-      </div>
 
-      {/* Idle Threshold Slider */}
-      <div className="setting-section">
-        <div className="section-header">
-          <h3>⏱️ Idle Detection</h3>
-          <span className="threshold-value">{formatTime(config.idleThreshold)}</span>
-        </div>
-        <p className="section-desc">Time of inactivity before you're considered idle</p>
+          {/* Master Toggle */}
+          <div className="setting-row">
+            <div className="setting-info">
+              <span className="setting-label">Enable Nudges</span>
+              <span className="setting-desc">Get reminders when you're idle</span>
+            </div>
+            <button
+              className={`toggle ${config.enabled ? 'active' : ''}`}
+              onClick={() => updateConfig({ enabled: !config.enabled })}
+            >
+              <span className="toggle-track">
+                <span className="toggle-thumb" />
+              </span>
+            </button>
+          </div>
 
-        <div className="slider-container">
-          <input
-            type="range"
-            min="15"
-            max="300"
-            step="15"
-            value={config.idleThreshold}
-            onChange={e => handleIdleThresholdChange(Number(e.target.value))}
-            className="threshold-slider"
-          />
-          <div className="slider-labels">
-            <span>15s</span>
-            <span>5m</span>
+          {/* Sound Toggle */}
+          <div className="setting-row">
+            <div className="setting-info">
+              <span className="setting-label">Sound Effects</span>
+              <span className="setting-desc">Play sounds with notifications</span>
+            </div>
+            <button
+              className={`toggle ${config.soundEnabled ? 'active' : ''}`}
+              onClick={() => updateConfig({ soundEnabled: !config.soundEnabled })}
+              disabled={!config.enabled}
+            >
+              <span className="toggle-track">
+                <span className="toggle-thumb" />
+              </span>
+            </button>
+          </div>
+
+          {/* Idle Threshold */}
+          <div className="setting-row column">
+            <div className="setting-info">
+              <span className="setting-label">Idle Detection</span>
+              <span className="setting-desc">Time before considering you idle</span>
+            </div>
+            <div className="threshold-options">
+              {THRESHOLD_OPTIONS.map(opt => (
+                <button
+                  key={opt.value}
+                  className={`threshold-btn ${config.idleThreshold === opt.value ? 'active' : ''}`}
+                  onClick={() => updateConfig({ idleThreshold: opt.value })}
+                  disabled={!config.enabled}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* Nudge Level */}
-      <div className="setting-section">
-        <div className="section-header">
-          <h3>🎚️ Nudge Intensity</h3>
-        </div>
-        <p className="section-desc">How aggressively you want to be reminded</p>
+        {/* Intensity Card */}
+        <div className="settings-card">
+          <div className="card-header">
+            <div className="card-icon">⚡</div>
+            <div>
+              <h3>Nudge Intensity</h3>
+              <p>How persistent should reminders be?</p>
+            </div>
+          </div>
 
-        <div className="level-cards">
-          {([1, 2, 3] as NudgeLevel[]).map(level => {
-            const info = LEVEL_INFO[level];
-            const isSelected = config.level === level;
-            return (
+          <div className="intensity-grid">
+            {INTENSITY_LEVELS.map(level => (
               <button
-                key={level}
-                className={`level-card ${isSelected ? 'active' : ''}`}
-                onClick={() => handleChange('level', level)}
+                key={level.value}
+                className={`intensity-card ${config.level === level.value ? 'active' : ''}`}
+                onClick={() => updateConfig({ level: level.value })}
+                disabled={!config.enabled}
               >
-                <div className="level-icon">{info.icon}</div>
-                <div className="level-content">
-                  <span className="level-name">{info.name}</span>
-                  <span className="level-desc">{info.description}</span>
-                  <div className="level-timing">
-                    {level === 3 ? (
-                      <span>Auto-pause: {getAutoPauseTime(level)} after idle</span>
-                    ) : (
-                      <span>
-                        Warning: {getWarningTime(level)} • Pause: {getAutoPauseTime(level)}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                {isSelected && <span className="check-icon">✓</span>}
+                <span className="intensity-icon">{level.icon}</span>
+                <span className="intensity-label">{level.label}</span>
+                <span className="intensity-desc">{level.description}</span>
               </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Sound Toggle */}
-      <div className="setting-section">
-        <div className="toggle-setting">
-          <div className="toggle-info">
-            <span className="toggle-label">🔊 Sound Effects</span>
-            <span className="toggle-desc">Play sound with notifications</span>
+            ))}
           </div>
-          <label className="switch">
-            <input
-              type="checkbox"
-              checked={config.soundEnabled}
-              onChange={e => handleChange('soundEnabled', e.target.checked)}
-            />
-            <span className="slider"></span>
-          </label>
-        </div>
-      </div>
 
-      {/* Quiet Hours */}
-      <div className="setting-section">
-        <div className="toggle-setting">
-          <div className="toggle-info">
-            <span className="toggle-label">🌙 Quiet Hours</span>
-            <span className="toggle-desc">Disable notifications during set times</span>
+          <div className="intensity-bar">
+            <div className="intensity-fill" style={{ width: `${(config.level / 4) * 100}%` }} />
+            <div className="intensity-markers">
+              {[1, 2, 3, 4].map(i => (
+                <span key={i} className={`marker ${config.level >= i ? 'active' : ''}`} />
+              ))}
+            </div>
           </div>
-          <label className="switch">
-            <input
-              type="checkbox"
-              checked={config.quietHoursEnabled}
-              onChange={e => handleChange('quietHoursEnabled', e.target.checked)}
-            />
-            <span className="slider"></span>
-          </label>
         </div>
 
-        {config.quietHoursEnabled && (
-          <div className="time-range">
-            <input
-              type="time"
-              value={config.quietHoursStart || '22:00'}
-              onChange={e => handleChange('quietHoursStart', e.target.value)}
-            />
-            <span className="time-separator">to</span>
-            <input
-              type="time"
-              value={config.quietHoursEnd || '08:00'}
-              onChange={e => handleChange('quietHoursEnd', e.target.value)}
-            />
+        {/* Quiet Hours Card */}
+        <div className="settings-card">
+          <div className="card-header">
+            <div className="card-icon">🌙</div>
+            <div>
+              <h3>Quiet Hours</h3>
+              <p>Pause notifications during specific times</p>
+            </div>
           </div>
-        )}
-      </div>
 
-      {/* Current Summary */}
-      <div className="summary-card">
-        <h4>📋 Your Current Setup</h4>
-        <div className="summary-items">
-          <div className="summary-item">
-            <span className="summary-label">Idle detection</span>
-            <span className="summary-value">{formatTime(config.idleThreshold)}</span>
+          <div className="setting-row">
+            <div className="setting-info">
+              <span className="setting-label">Enable Quiet Hours</span>
+              <span className="setting-desc">Silence nudges during set times</span>
+            </div>
+            <button
+              className={`toggle ${config.quietHoursEnabled ? 'active' : ''}`}
+              onClick={() => updateConfig({ quietHoursEnabled: !config.quietHoursEnabled })}
+            >
+              <span className="toggle-track">
+                <span className="toggle-thumb" />
+              </span>
+            </button>
           </div>
-          <div className="summary-item">
-            <span className="summary-label">Nudge style</span>
-            <span className="summary-value">
-              {levelInfo.icon} {levelInfo.name}
-            </span>
-          </div>
-          {config.level !== 3 && (
-            <div className="summary-item">
-              <span className="summary-label">Second warning</span>
-              <span className="summary-value">{getWarningTime(config.level)} after idle</span>
+
+          {config.quietHoursEnabled && (
+            <div className="time-range">
+              <div className="time-input">
+                <label>From</label>
+                <input
+                  type="time"
+                  value={config.quietHoursStart}
+                  onChange={e => updateConfig({ quietHoursStart: e.target.value })}
+                />
+              </div>
+              <span className="time-separator">→</span>
+              <div className="time-input">
+                <label>To</label>
+                <input
+                  type="time"
+                  value={config.quietHoursEnd}
+                  onChange={e => updateConfig({ quietHoursEnd: e.target.value })}
+                />
+              </div>
             </div>
           )}
-          <div className="summary-item highlight">
-            <span className="summary-label">Auto-pause</span>
-            <span className="summary-value">{getAutoPauseTime(config.level)} after idle</span>
+        </div>
+
+        {/* About Card */}
+        <div className="settings-card about-card">
+          <div className="card-header">
+            <div className="card-icon">✨</div>
+            <div>
+              <h3>About Focus Friend</h3>
+              <p>Your productivity companion</p>
+            </div>
+          </div>
+
+          <div className="about-content">
+            <div className="version-info">
+              <span className="version-label">Version</span>
+              <span className="version-value">1.0.0</span>
+            </div>
+            <p className="about-text">
+              Focus Friend helps you stay productive by tracking your focus sessions and gently
+              nudging you when you drift off task.
+            </p>
+            <div className="about-links">
+              <button className="link-btn">Documentation</button>
+              <button className="link-btn">Report Issue</button>
+            </div>
           </div>
         </div>
       </div>
 
+      {/* Save Indicator */}
+      {hasChanges && (
+        <div className="save-toast">
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <path d="M20 6L9 17l-5-5" />
+          </svg>
+          Settings saved
+        </div>
+      )}
+
       <style>{`
-        .nudge-settings {
-          background: var(--color-bg-card);
-          border-radius: var(--radius-xl);
-          padding: var(--spacing-xl);
-          box-shadow: var(--shadow-lg);
-          border: 1px solid var(--color-border);
+        .settings-container {
+          max-width: 800px;
+          margin: 0 auto;
         }
 
-        .settings-header {
-          margin-bottom: var(--spacing-xl);
+        .settings-grid {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: var(--space-4, 16px);
         }
 
-        .settings-header h2 {
-          font-size: var(--font-size-xl);
-          font-weight: 700;
-          margin-bottom: var(--spacing-xs);
+        @media (max-width: 700px) {
+          .settings-grid {
+            grid-template-columns: 1fr;
+          }
         }
 
-        .settings-header p {
-          color: var(--color-text-secondary);
-          font-size: var(--font-size-sm);
+        /* === SETTINGS CARD === */
+        .settings-card {
+          background: var(--bg-card, #1A1A1A);
+          border: 1px solid var(--border-subtle, #2A2A2A);
+          border-radius: var(--radius-xl, 24px);
+          padding: var(--space-5, 20px);
         }
 
-        .setting-section {
-          padding: var(--spacing-lg) 0;
-          border-bottom: 1px solid var(--color-border);
-        }
-
-        .setting-section:last-of-type {
-          border-bottom: none;
-        }
-
-        .section-header {
+        .card-header {
           display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: var(--spacing-xs);
+          gap: var(--space-3, 12px);
+          margin-bottom: var(--space-5, 20px);
         }
 
-        .section-header h3 {
-          font-size: var(--font-size-base);
-          font-weight: 600;
-        }
-
-        .threshold-value {
-          background: var(--color-accent);
-          color: white;
-          padding: var(--spacing-xs) var(--spacing-md);
-          border-radius: var(--radius-lg);
-          font-size: var(--font-size-sm);
-          font-weight: 600;
-        }
-
-        .section-desc {
-          color: var(--color-text-secondary);
-          font-size: var(--font-size-sm);
-          margin-bottom: var(--spacing-md);
-        }
-
-        .toggle-setting {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-
-        .toggle-info {
-          display: flex;
-          flex-direction: column;
-        }
-
-        .toggle-label {
-          font-weight: 600;
-        }
-
-        .toggle-desc {
-          font-size: var(--font-size-sm);
-          color: var(--color-text-secondary);
-        }
-
-        .switch {
-          position: relative;
-          display: inline-block;
-          width: 52px;
-          height: 28px;
-        }
-
-        .switch input {
-          opacity: 0;
-          width: 0;
-          height: 0;
-        }
-
-        .switch .slider {
-          position: absolute;
-          cursor: pointer;
-          top: 0;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          background-color: var(--color-bg-secondary);
-          transition: 0.3s;
-          border-radius: 28px;
-        }
-
-        .switch .slider:before {
-          position: absolute;
-          content: "";
-          height: 20px;
-          width: 20px;
-          left: 4px;
-          bottom: 4px;
-          background-color: white;
-          transition: 0.3s;
-          border-radius: 50%;
-        }
-
-        .switch input:checked + .slider {
-          background-color: var(--color-accent);
-        }
-
-        .switch input:checked + .slider:before {
-          transform: translateX(24px);
-        }
-
-        .slider-container {
-          padding: var(--spacing-sm) 0;
-        }
-
-        .threshold-slider {
-          width: 100%;
-          height: 8px;
-          border-radius: 4px;
-          background: var(--color-bg-secondary);
-          outline: none;
-          -webkit-appearance: none;
-          appearance: none;
-        }
-
-        .threshold-slider::-webkit-slider-thumb {
-          -webkit-appearance: none;
-          appearance: none;
-          width: 24px;
-          height: 24px;
-          border-radius: 50%;
-          background: var(--color-accent);
-          cursor: pointer;
-          border: 3px solid white;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-          transition: transform 0.15s ease;
-        }
-
-        .threshold-slider::-webkit-slider-thumb:hover {
-          transform: scale(1.1);
-        }
-
-        .slider-labels {
-          display: flex;
-          justify-content: space-between;
-          font-size: var(--font-size-xs);
-          color: var(--color-text-secondary);
-          margin-top: var(--spacing-xs);
-        }
-
-        .level-cards {
-          display: flex;
-          flex-direction: column;
-          gap: var(--spacing-sm);
-        }
-
-        .level-card {
-          display: flex;
-          align-items: center;
-          gap: var(--spacing-md);
-          padding: var(--spacing-md);
-          background: var(--color-bg-secondary);
-          border: 2px solid var(--color-border);
-          border-radius: var(--radius-lg);
-          cursor: pointer;
-          text-align: left;
-          transition: all var(--transition-fast);
-        }
-
-        .level-card:hover {
-          border-color: var(--color-text-secondary);
-        }
-
-        .level-card.active {
-          border-color: var(--color-accent);
-          background: rgba(233, 69, 96, 0.1);
-        }
-
-        .level-icon {
-          font-size: 1.5rem;
-          width: 48px;
-          height: 48px;
+        .card-icon {
+          width: 40px;
+          height: 40px;
+          background: var(--bg-elevated, #1C1C1C);
+          border-radius: var(--radius-md, 12px);
           display: flex;
           align-items: center;
           justify-content: center;
-          background: var(--color-bg-card);
-          border-radius: var(--radius-md);
-          flex-shrink: 0;
+          font-size: 1.25rem;
         }
 
-        .level-content {
-          flex: 1;
+        .card-header h3 {
+          font-size: 1rem;
+          font-weight: 600;
+          color: var(--text-primary, #FFFFFF);
+          margin-bottom: 2px;
+        }
+
+        .card-header p {
+          font-size: 0.8rem;
+          color: var(--text-muted, #737373);
+        }
+
+        /* === SETTING ROW === */
+        .setting-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: var(--space-4, 16px) 0;
+          border-bottom: 1px solid var(--border-subtle, #2A2A2A);
+        }
+
+        .setting-row:last-child {
+          border-bottom: none;
+        }
+
+        .setting-row.column {
+          flex-direction: column;
+          align-items: stretch;
+          gap: var(--space-4, 16px);
+        }
+
+        .setting-info {
           display: flex;
           flex-direction: column;
           gap: 2px;
         }
 
-        .level-name {
+        .setting-label {
+          font-size: 0.9rem;
+          font-weight: 500;
+          color: var(--text-primary, #FFFFFF);
+        }
+
+        .setting-desc {
+          font-size: 0.75rem;
+          color: var(--text-muted, #737373);
+        }
+
+        /* === TOGGLE === */
+        .toggle {
+          background: none;
+          border: none;
+          padding: 0;
+          cursor: pointer;
+        }
+
+        .toggle:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+
+        .toggle-track {
+          display: block;
+          width: 44px;
+          height: 24px;
+          background: var(--border-default, #333333);
+          border-radius: 12px;
+          position: relative;
+          transition: background 0.2s ease;
+        }
+
+        .toggle.active .toggle-track {
+          background: var(--accent-green, #4ADE80);
+        }
+
+        .toggle-thumb {
+          position: absolute;
+          top: 2px;
+          left: 2px;
+          width: 20px;
+          height: 20px;
+          background: var(--text-primary, #FFFFFF);
+          border-radius: 50%;
+          transition: transform 0.2s ease;
+        }
+
+        .toggle.active .toggle-thumb {
+          transform: translateX(20px);
+        }
+
+        /* === THRESHOLD OPTIONS === */
+        .threshold-options {
+          display: flex;
+          flex-wrap: wrap;
+          gap: var(--space-2, 8px);
+        }
+
+        .threshold-btn {
+          padding: var(--space-2, 8px) var(--space-3, 12px);
+          background: var(--bg-elevated, #1C1C1C);
+          border: 1px solid var(--border-subtle, #2A2A2A);
+          border-radius: var(--radius-full, 9999px);
+          font-size: 0.8rem;
+          color: var(--text-secondary, #A3A3A3);
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+
+        .threshold-btn:hover:not(:disabled) {
+          border-color: var(--border-default, #333333);
+          color: var(--text-primary, #FFFFFF);
+        }
+
+        .threshold-btn.active {
+          background: var(--accent-green-dim, rgba(74, 222, 128, 0.15));
+          border-color: var(--accent-green, #4ADE80);
+          color: var(--accent-green, #4ADE80);
+        }
+
+        .threshold-btn:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+
+        /* === INTENSITY GRID === */
+        .intensity-grid {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: var(--space-3, 12px);
+          margin-bottom: var(--space-4, 16px);
+        }
+
+        .intensity-card {
+          padding: var(--space-4, 16px);
+          background: var(--bg-elevated, #1C1C1C);
+          border: 1px solid var(--border-subtle, #2A2A2A);
+          border-radius: var(--radius-lg, 16px);
+          text-align: center;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+
+        .intensity-card:hover:not(:disabled) {
+          border-color: var(--border-default, #333333);
+        }
+
+        .intensity-card.active {
+          border-color: var(--accent-green, #4ADE80);
+          background: var(--accent-green-dim, rgba(74, 222, 128, 0.15));
+        }
+
+        .intensity-card:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+
+        .intensity-icon {
+          display: block;
+          font-size: 1.5rem;
+          margin-bottom: var(--space-2, 8px);
+        }
+
+        .intensity-label {
+          display: block;
+          font-size: 0.9rem;
           font-weight: 600;
-          color: var(--color-text-primary);
+          color: var(--text-primary, #FFFFFF);
+          margin-bottom: 2px;
         }
 
-        .level-desc {
-          font-size: var(--font-size-sm);
-          color: var(--color-text-secondary);
+        .intensity-desc {
+          font-size: 0.7rem;
+          color: var(--text-muted, #737373);
         }
 
-        .level-timing {
-          font-size: var(--font-size-xs);
-          color: var(--color-accent);
-          margin-top: 2px;
+        /* === INTENSITY BAR === */
+        .intensity-bar {
+          position: relative;
+          height: 6px;
+          background: var(--border-subtle, #2A2A2A);
+          border-radius: 3px;
         }
 
-        .check-icon {
-          color: var(--color-accent);
-          font-weight: bold;
-          font-size: var(--font-size-lg);
-          flex-shrink: 0;
+        .intensity-fill {
+          height: 100%;
+          background: linear-gradient(90deg, var(--accent-green, #4ADE80), var(--accent-orange, #FB923C));
+          border-radius: 3px;
+          transition: width 0.3s ease;
         }
 
+        .intensity-markers {
+          position: absolute;
+          top: 50%;
+          left: 0;
+          right: 0;
+          transform: translateY(-50%);
+          display: flex;
+          justify-content: space-between;
+          padding: 0 4px;
+        }
+
+        .marker {
+          width: 8px;
+          height: 8px;
+          background: var(--bg-card, #1A1A1A);
+          border: 2px solid var(--border-default, #333333);
+          border-radius: 50%;
+          transition: all 0.2s ease;
+        }
+
+        .marker.active {
+          background: var(--accent-green, #4ADE80);
+          border-color: var(--accent-green, #4ADE80);
+        }
+
+        /* === TIME RANGE === */
         .time-range {
           display: flex;
           align-items: center;
-          gap: var(--spacing-md);
-          margin-top: var(--spacing-md);
-          padding: var(--spacing-md);
-          background: var(--color-bg-secondary);
-          border-radius: var(--radius-md);
+          gap: var(--space-4, 16px);
+          padding-top: var(--space-4, 16px);
         }
 
-        .time-range input {
-          padding: var(--spacing-sm) var(--spacing-md);
-          border: 1px solid var(--color-border);
-          background: var(--color-bg-card);
-          color: var(--color-text-primary);
-          border-radius: var(--radius-sm);
-          font-size: var(--font-size-base);
+        .time-input {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          gap: var(--space-2, 8px);
+        }
+
+        .time-input label {
+          font-size: 0.75rem;
+          color: var(--text-muted, #737373);
+        }
+
+        .time-input input {
+          padding: var(--space-3, 12px);
+          background: var(--bg-elevated, #1C1C1C);
+          border: 1px solid var(--border-subtle, #2A2A2A);
+          border-radius: var(--radius-md, 12px);
+          color: var(--text-primary, #FFFFFF);
+          font-size: 0.9rem;
+        }
+
+        .time-input input:focus {
+          outline: none;
+          border-color: var(--accent-green, #4ADE80);
         }
 
         .time-separator {
-          color: var(--color-text-secondary);
+          color: var(--text-muted, #737373);
+          margin-top: 20px;
         }
 
-        .summary-card {
-          background: linear-gradient(135deg, var(--color-bg-secondary) 0%, rgba(233, 69, 96, 0.05) 100%);
-          border: 1px solid var(--color-border);
-          border-radius: var(--radius-lg);
-          padding: var(--spacing-lg);
-          margin-top: var(--spacing-lg);
+        /* === ABOUT CARD === */
+        .about-card {
+          grid-column: 1 / -1;
         }
 
-        .summary-card h4 {
-          font-size: var(--font-size-base);
-          margin-bottom: var(--spacing-md);
+        .about-content {
+          padding-top: var(--space-4, 16px);
+          border-top: 1px solid var(--border-subtle, #2A2A2A);
         }
 
-        .summary-items {
-          display: flex;
-          flex-direction: column;
-          gap: var(--spacing-sm);
-        }
-
-        .summary-item {
+        .version-info {
           display: flex;
           justify-content: space-between;
-          padding: var(--spacing-xs) 0;
+          margin-bottom: var(--space-4, 16px);
         }
 
-        .summary-item.highlight {
-          background: rgba(233, 69, 96, 0.1);
-          margin: 0 calc(-1 * var(--spacing-md));
-          padding: var(--spacing-sm) var(--spacing-md);
-          border-radius: var(--radius-sm);
+        .version-label {
+          font-size: 0.85rem;
+          color: var(--text-muted, #737373);
         }
 
-        .summary-label {
-          color: var(--color-text-secondary);
-          font-size: var(--font-size-sm);
-        }
-
-        .summary-value {
+        .version-value {
+          font-size: 0.85rem;
           font-weight: 600;
-          font-size: var(--font-size-sm);
+          color: var(--accent-green, #4ADE80);
         }
 
-        .summary-item.highlight .summary-value {
-          color: var(--color-accent);
+        .about-text {
+          font-size: 0.85rem;
+          color: var(--text-secondary, #A3A3A3);
+          line-height: 1.6;
+          margin-bottom: var(--space-4, 16px);
+        }
+
+        .about-links {
+          display: flex;
+          gap: var(--space-3, 12px);
+        }
+
+        .link-btn {
+          padding: var(--space-2, 8px) var(--space-4, 16px);
+          background: var(--bg-elevated, #1C1C1C);
+          border: 1px solid var(--border-subtle, #2A2A2A);
+          border-radius: var(--radius-full, 9999px);
+          font-size: 0.8rem;
+          color: var(--text-secondary, #A3A3A3);
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+
+        .link-btn:hover {
+          border-color: var(--border-default, #333333);
+          color: var(--text-primary, #FFFFFF);
+        }
+
+        /* === SAVE TOAST === */
+        .save-toast {
+          position: fixed;
+          bottom: var(--space-6, 24px);
+          left: 50%;
+          transform: translateX(-50%);
+          display: flex;
+          align-items: center;
+          gap: var(--space-2, 8px);
+          padding: var(--space-3, 12px) var(--space-5, 20px);
+          background: var(--accent-green, #4ADE80);
+          color: var(--bg-base, #0C0C0C);
+          border-radius: var(--radius-full, 9999px);
+          font-size: 0.85rem;
+          font-weight: 600;
+          box-shadow: var(--shadow-glow-green, 0 0 20px rgba(74, 222, 128, 0.3));
+          animation: slideUp 0.3s ease;
+        }
+
+        @keyframes slideUp {
+          from {
+            opacity: 0;
+            transform: translateX(-50%) translateY(10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+          }
         }
       `}</style>
     </div>
   );
 }
+
+export default NudgeSettings;

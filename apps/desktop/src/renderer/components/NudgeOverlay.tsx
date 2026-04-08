@@ -1,7 +1,6 @@
 /**
- * Nudge Overlay Component
+ * Nudge Overlay - Vapor Dusk Edition
  * Full-screen overlay for focused mode auto-pause
- * Only shows Resume and End Session options (breaks are automatic)
  */
 
 import { useEffect, useState } from 'react';
@@ -16,13 +15,11 @@ export function NudgeOverlay({ nudge, onAction }: NudgeOverlayProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [idleTime, setIdleTime] = useState(0);
 
-  // Animate in
   useEffect(() => {
     const timer = setTimeout(() => setIsVisible(true), 50);
     return () => clearTimeout(timer);
   }, []);
 
-  // Track idle time
   useEffect(() => {
     const interval = setInterval(() => {
       setIdleTime(prev => prev + 1);
@@ -32,7 +29,7 @@ export function NudgeOverlay({ nudge, onAction }: NudgeOverlayProps) {
 
   const handleAction = (action: 'resume' | 'end' | 'pause') => {
     setIsVisible(false);
-    setTimeout(() => onAction(action), 200);
+    setTimeout(() => onAction(action), 250);
   };
 
   const formatTime = (seconds: number): string => {
@@ -48,27 +45,39 @@ export function NudgeOverlay({ nudge, onAction }: NudgeOverlayProps) {
     <div className={`nudge-overlay ${isVisible ? 'visible' : ''}`}>
       <div className="overlay-backdrop" />
 
+      {/* Ambient glow effect */}
+      <div className="overlay-glow" />
+
       <div className="overlay-content">
-        <div className="overlay-icon">{nudge.stage === 'auto-pause' ? '⏸️' : '👋'}</div>
+        <div className="overlay-icon">{nudge.stage === 'auto-pause' ? '⏸' : '👋'}</div>
 
         <h2 className="overlay-title">{nudge.title}</h2>
         <p className="overlay-message">{nudge.message}</p>
 
-        {idleTime > 0 && <p className="idle-indicator">Idle for {formatTime(idleTime)}</p>}
+        {idleTime > 0 && (
+          <div className="idle-indicator">
+            <span className="idle-dot" />
+            Idle for {formatTime(idleTime)}
+          </div>
+        )}
 
         <div className="overlay-actions">
           <button className="overlay-btn primary" onClick={() => handleAction('resume')}>
-            <span className="btn-icon">▶️</span>
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M6 4l10 6-10 6V4z" fill="currentColor" />
+            </svg>
             Resume Focus
           </button>
 
           <button className="overlay-btn secondary" onClick={() => handleAction('end')}>
-            <span className="btn-icon">⏹️</span>
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <rect x="4" y="4" width="12" height="12" rx="2" fill="currentColor" />
+            </svg>
             End Session
           </button>
         </div>
 
-        <p className="overlay-hint">Your session is paused. No focus time is being tracked.</p>
+        <p className="overlay-hint">Your session is paused · No focus time is being tracked</p>
       </div>
 
       <style>{`
@@ -90,23 +99,43 @@ export function NudgeOverlay({ nudge, onAction }: NudgeOverlayProps) {
         .overlay-backdrop {
           position: absolute;
           inset: 0;
-          background: rgba(15, 15, 26, 0.95);
-          backdrop-filter: blur(10px);
+          background: rgba(10, 10, 15, 0.95);
+          backdrop-filter: blur(20px);
+        }
+
+        .overlay-glow {
+          position: absolute;
+          top: 0;
+          left: 50%;
+          transform: translateX(-50%);
+          width: 600px;
+          height: 400px;
+          background: radial-gradient(ellipse at center, rgba(255, 107, 107, 0.15) 0%, transparent 70%);
+          pointer-events: none;
         }
 
         .overlay-content {
           position: relative;
           z-index: 1;
           text-align: center;
-          padding: var(--spacing-2xl);
-          max-width: 480px;
+          padding: 48px 40px;
+          max-width: 440px;
           width: 90%;
-          background: var(--color-bg-card);
-          border-radius: var(--radius-xl);
-          border: 1px solid var(--color-border);
-          box-shadow: var(--shadow-lg);
-          transform: translateY(20px);
-          animation: slideUp 0.3s ease forwards;
+          background: linear-gradient(180deg, 
+            var(--dusk-surface, #1a1a25) 0%, 
+            var(--dusk-deep, #12121a) 100%
+          );
+          border-radius: 24px;
+          border: 1px solid var(--dusk-border, #2d2d3d);
+          box-shadow: 
+            0 25px 80px rgba(0, 0, 0, 0.5),
+            0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+          transform: translateY(30px);
+          animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        .nudge-overlay.visible .overlay-content {
+          animation-delay: 0.1s;
         }
 
         @keyframes slideUp {
@@ -117,94 +146,111 @@ export function NudgeOverlay({ nudge, onAction }: NudgeOverlayProps) {
 
         .overlay-icon {
           font-size: 4rem;
-          margin-bottom: var(--spacing-lg);
+          margin-bottom: 24px;
           animation: pulse 2s ease-in-out infinite;
+          filter: drop-shadow(0 4px 20px rgba(255, 107, 107, 0.3));
         }
 
         @keyframes pulse {
           0%, 100% { transform: scale(1); }
-          50% { transform: scale(1.1); }
+          50% { transform: scale(1.08); }
         }
 
         .overlay-title {
-          font-size: var(--font-size-2xl);
+          font-family: var(--font-display, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif);
+          font-size: 1.75rem;
           font-weight: 700;
-          margin-bottom: var(--spacing-md);
-          color: var(--color-text-primary);
+          font-stretch: 105%;
+          margin-bottom: 12px;
+          color: var(--text-bright, #fafafa);
+          letter-spacing: -0.02em;
         }
 
         .overlay-message {
-          font-size: var(--font-size-base);
-          color: var(--color-text-secondary);
-          margin-bottom: var(--spacing-lg);
+          font-size: 1rem;
+          color: var(--text-secondary, #a1a1aa);
+          margin-bottom: 24px;
           line-height: 1.6;
         }
 
         .idle-indicator {
-          display: inline-block;
-          padding: var(--spacing-xs) var(--spacing-md);
-          background: rgba(251, 191, 36, 0.1);
-          border: 1px solid rgba(251, 191, 36, 0.3);
-          border-radius: var(--radius-lg);
-          color: var(--color-warning);
-          font-size: var(--font-size-sm);
+          display: inline-flex;
+          align-items: center;
+          gap: 10px;
+          padding: 10px 20px;
+          background: rgba(255, 217, 61, 0.1);
+          border: 1px solid rgba(255, 217, 61, 0.2);
+          border-radius: 12px;
+          color: var(--sun-gold, #ffd93d);
+          font-size: 0.875rem;
           font-weight: 500;
-          margin-bottom: var(--spacing-xl);
+          margin-bottom: 32px;
           font-variant-numeric: tabular-nums;
+        }
+
+        .idle-dot {
+          width: 8px;
+          height: 8px;
+          background: var(--sun-gold, #ffd93d);
+          border-radius: 50%;
+          animation: blink 1.5s ease-in-out infinite;
+        }
+
+        @keyframes blink {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.3; }
         }
 
         .overlay-actions {
           display: flex;
           flex-direction: column;
-          gap: var(--spacing-md);
-          margin-bottom: var(--spacing-lg);
+          gap: 12px;
+          margin-bottom: 24px;
         }
 
         .overlay-btn {
           display: flex;
           align-items: center;
           justify-content: center;
-          gap: var(--spacing-sm);
-          padding: var(--spacing-md) var(--spacing-xl);
+          gap: 10px;
+          padding: 16px 24px;
           border: none;
-          border-radius: var(--radius-md);
-          font-size: var(--font-size-base);
+          border-radius: 14px;
+          font-family: var(--font-body, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif);
+          font-size: 1rem;
           font-weight: 600;
           cursor: pointer;
-          transition: all var(--transition-fast);
+          transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
           width: 100%;
         }
 
-        .overlay-btn .btn-icon {
-          font-size: 1.1rem;
-        }
-
         .overlay-btn.primary {
-          background: linear-gradient(135deg, #0078d4 0%, #106ebe 100%);
-          color: white;
-          box-shadow: 0 4px 14px rgba(0, 120, 212, 0.4);
+          background: linear-gradient(135deg, #ff6b6b 0%, #ffa07a 50%, #ffd93d 100%);
+          color: var(--dusk-void, #0a0a0f);
+          box-shadow: 0 8px 25px rgba(255, 107, 107, 0.3);
         }
 
         .overlay-btn.primary:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 6px 20px rgba(0, 120, 212, 0.5);
+          transform: translateY(-3px);
+          box-shadow: 0 12px 35px rgba(255, 107, 107, 0.4);
         }
 
         .overlay-btn.secondary {
-          background: var(--color-bg-secondary);
-          color: var(--color-text-primary);
-          border: 1px solid var(--color-border);
+          background: var(--dusk-elevated, #242432);
+          color: var(--text-primary, #e4e4e7);
+          border: 1px solid var(--dusk-border, #2d2d3d);
         }
 
         .overlay-btn.secondary:hover {
-          background: var(--color-bg-hover);
-          border-color: var(--color-text-secondary);
+          background: var(--dusk-surface, #1a1a25);
+          border-color: var(--text-muted, #71717a);
+          transform: translateY(-2px);
         }
 
         .overlay-hint {
-          font-size: var(--font-size-xs);
-          color: var(--color-text-secondary);
-          opacity: 0.7;
+          font-size: 0.75rem;
+          color: var(--text-muted, #71717a);
+          letter-spacing: 0.02em;
         }
       `}</style>
     </div>
