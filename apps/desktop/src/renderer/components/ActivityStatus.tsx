@@ -1,12 +1,38 @@
 /**
- * Focus Sessions Component
- * Microsoft Clock style - adjustable timer with dynamic break calculation
+ * Focus Sessions Component - Final Polished Version V3
+ * Tutorial 15: Production Polish
  *
- * Breaks are automatic - user can only pause or end session
+ * Updated with:
+ * - Tasks feature
+ * - Recent Activity feed
+ * - Better spacing and layout
+ * - Digital clock-style timer display
+ * - RE-ADDED: Gamification (Level bar, Points popup, Level up modal, Achievement toasts)
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useActivity } from '../hooks/useActivity';
+import {
+  FocusWrappedButton,
+  saveSession as saveSessionToWrapped,
+  getDailyProgress,
+  saveDailyProgress,
+} from './focusWrapped';
+import {
+  // Data functions
+  awardPointsForSession,
+  updateChallengeProgress,
+  getLevelForXP,
+  // UI Components
+  LevelProgressBar,
+  PointsPopup,
+  LevelUpModal,
+  AchievementToast,
+  // Types
+  type PointsResult,
+  type Level,
+  type Achievement,
+} from './gamification';
 
 interface ActivityStatusProps {
   showDetails?: boolean;
@@ -16,13 +42,28 @@ interface ActivityStatusProps {
 
 type SessionMode = 'idle' | 'focus' | 'break' | 'paused';
 
-// Break calculation constants
-const BREAK_DURATION = 5; // 5 minute breaks
-const MIN_SESSION_FOR_BREAK = 30; // Only add breaks for sessions >= 30 min
-const FOCUS_PERIOD_TARGET = 25; // Target focus period length (Pomodoro style)
+// Constants
+const BREAK_DURATION = 5;
+const MIN_SESSION_FOR_BREAK = 30;
+const FOCUS_PERIOD_TARGET = 25;
 const MIN_DURATION = 15;
 const MAX_DURATION = 240;
 const STEP = 5;
+
+interface Task {
+  id: string;
+  text: string;
+  completed: boolean;
+  createdAt: string;
+}
+
+interface RecentActivity {
+  id: string;
+  type: 'completed' | 'started' | 'ended';
+  duration: number;
+  timestamp: string;
+  label: string;
+}
 
 interface SessionSchedule {
   totalMinutes: number;
@@ -33,9 +74,7 @@ interface SessionSchedule {
   schedule: Array<{ type: 'focus' | 'break'; duration: number }>;
 }
 
-// Calculate optimal session schedule based on total duration
 function calculateSchedule(totalMinutes: number, skipBreaks: boolean = false): SessionSchedule {
-  // No breaks for short sessions or if user skips breaks
   if (totalMinutes < MIN_SESSION_FOR_BREAK || skipBreaks) {
     return {
       totalMinutes,
@@ -47,29 +86,21 @@ function calculateSchedule(totalMinutes: number, skipBreaks: boolean = false): S
     };
   }
 
-  // Calculate how many focus+break cycles we can fit
   const cycleLength = FOCUS_PERIOD_TARGET + BREAK_DURATION;
-
-  // Calculate number of complete cycles that fit
   let numBreaks = Math.floor((totalMinutes - FOCUS_PERIOD_TARGET) / cycleLength);
   numBreaks = Math.max(0, numBreaks);
 
-  // Recalculate to ensure we don't exceed total time
   const totalBreakTime = numBreaks * BREAK_DURATION;
   const totalFocusTime = totalMinutes - totalBreakTime;
   const numFocusPeriods = numBreaks + 1;
-
-  // Distribute focus time evenly across periods
   const baseFocusDuration = Math.floor(totalFocusTime / numFocusPeriods);
   const extraMinutes = totalFocusTime - baseFocusDuration * numFocusPeriods;
 
-  // Build the schedule
   const schedule: Array<{ type: 'focus' | 'break'; duration: number }> = [];
 
   for (let i = 0; i < numFocusPeriods; i++) {
     const thisFocusDuration = baseFocusDuration + (i < extraMinutes ? 1 : 0);
     schedule.push({ type: 'focus', duration: thisFocusDuration });
-
     if (i < numFocusPeriods - 1) {
       schedule.push({ type: 'break', duration: BREAK_DURATION });
     }
@@ -85,51 +116,12 @@ function calculateSchedule(totalMinutes: number, skipBreaks: boolean = false): S
   };
 }
 
-// Daily progress storage
 interface DailyProgress {
   date: string;
   totalFocusMinutes: number;
   sessionsCompleted: number;
   goalMinutes: number;
   streak: number;
-}
-
-function getDailyProgress(): DailyProgress {
-  const today = new Date().toISOString().split('T')[0];
-  const stored = localStorage.getItem('focus-friend-daily-progress');
-
-  if (stored) {
-    try {
-      const data = JSON.parse(stored);
-      if (data.date === today) {
-        return data;
-      }
-      const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
-      const newStreak =
-        data.date === yesterday && data.totalFocusMinutes >= data.goalMinutes ? data.streak + 1 : 0;
-      return {
-        date: today,
-        totalFocusMinutes: 0,
-        sessionsCompleted: 0,
-        goalMinutes: data.goalMinutes || 180,
-        streak: newStreak,
-      };
-    } catch (e) {
-      console.error('Error parsing daily progress:', e);
-    }
-  }
-
-  return {
-    date: today,
-    totalFocusMinutes: 0,
-    sessionsCompleted: 0,
-    goalMinutes: 180,
-    streak: 0,
-  };
-}
-
-function saveDailyProgress(progress: DailyProgress): void {
-  localStorage.setItem('focus-friend-daily-progress', JSON.stringify(progress));
 }
 
 function getYesterdayMinutes(): number {
@@ -139,11 +131,53 @@ function getYesterdayMinutes(): number {
     return Math.round(
       sessions
         .filter((s: any) => s.date === yesterday)
-        .reduce((acc: number, s: any) => acc + (s.focusTime || 0), 0) / 60
+        .reduce((acc: number, s: any) => acc + (s.focusTime || s.duration * 60 || 0), 0) / 60
     );
-  } catch (e) {
+  } catch {
     return 0;
   }
+}
+
+function loadTasks(): Task[] {
+  try {
+    return JSON.parse(localStorage.getItem('focus-friend-tasks') || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function saveTasks(tasks: Task[]) {
+  localStorage.setItem('focus-friend-tasks', JSON.stringify(tasks));
+}
+
+function loadRecentActivity(): RecentActivity[] {
+  try {
+    const sessions = JSON.parse(localStorage.getItem('focus-friend-sessions') || '[]');
+    return sessions
+      .slice(-10)
+      .reverse()
+      .map((s: any) => ({
+        id: s.id,
+        type: s.completed ? 'completed' : 'ended',
+        duration: Math.round((s.focusTime || 0) / 60),
+        timestamp: s.endTime || s.startTime,
+        label: s.completed ? 'Focus Session' : 'Session',
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function formatTimeAgo(timestamp: string): string {
+  const diff = Date.now() - new Date(timestamp).getTime();
+  const mins = Math.floor(diff / 60000);
+  const hours = Math.floor(mins / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days > 0) return `${days}d ago`;
+  if (hours > 0) return `${hours}h ago`;
+  if (mins > 0) return `${mins}m ago`;
+  return 'just now';
 }
 
 export function ActivityStatus({
@@ -154,13 +188,11 @@ export function ActivityStatus({
   const { state, stats, isSessionActive, startSession, endSession, resumeSession, formatIdleTime } =
     useActivity({ autoStart: true });
 
-  // Session configuration state
   const [mode, setMode] = useState<SessionMode>('idle');
   const [selectedDuration, setSelectedDuration] = useState(60);
   const [skipBreaks, setSkipBreaks] = useState(false);
   const [schedule, setSchedule] = useState<SessionSchedule>(() => calculateSchedule(60, false));
 
-  // Timer state
   const [currentPhaseIndex, setCurrentPhaseIndex] = useState(0);
   const [phaseTimeRemaining, setPhaseTimeRemaining] = useState(0);
   const [phaseTimeTotal, setPhaseTimeTotal] = useState(0);
@@ -168,77 +200,66 @@ export function ActivityStatus({
   const [totalFocusTime, setTotalFocusTime] = useState(0);
   const [totalBreakTime, setTotalBreakTime] = useState(0);
 
-  // Daily progress
-  const [dailyProgress, setDailyProgress] = useState<DailyProgress>(getDailyProgress);
+  const [dailyProgress, setDailyProgress] = useState<DailyProgress>(() => getDailyProgress());
   const [yesterdayMinutes, setYesterdayMinutes] = useState(0);
 
-  // Refs
+  // Tasks
+  const [tasks, setTasks] = useState<Task[]>(() => loadTasks());
+  const [newTaskText, setNewTaskText] = useState('');
+
+  // Editable daily goal state
+  const [isEditingGoal, setIsEditingGoal] = useState(false);
+  const [editGoalValue, setEditGoalValue] = useState('');
+
+  // Recent Activity
+  const [recentActivity, setRecentActivity] = useState<RecentActivity[]>(() =>
+    loadRecentActivity()
+  );
+
+  // === GAMIFICATION STATE (re-added) ===
+  const [gamificationRefreshKey, setGamificationRefreshKey] = useState(0);
+  const [showPointsPopup, setShowPointsPopup] = useState(false);
+  const [pointsResult, setPointsResult] = useState<PointsResult | null>(null);
+  const [showLevelUp, setShowLevelUp] = useState(false);
+  const [levelUpData, setLevelUpData] = useState<{ previous: Level; new: Level } | null>(null);
+  const [achievementQueue, setAchievementQueue] = useState<Achievement[]>([]);
+  const [currentAchievement, setCurrentAchievement] = useState<Achievement | null>(null);
+
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Load yesterday's data on mount
   useEffect(() => {
     setYesterdayMinutes(getYesterdayMinutes());
   }, []);
 
-  // Update schedule when duration or skipBreaks changes (only in idle mode)
   useEffect(() => {
     if (mode === 'idle') {
-      const newSchedule = calculateSchedule(selectedDuration, skipBreaks);
-      setSchedule(newSchedule);
+      const freshProgress = getDailyProgress();
+      if (freshProgress.date !== dailyProgress.date) {
+        setDailyProgress(freshProgress);
+        setYesterdayMinutes(getYesterdayMinutes());
+      }
+      setRecentActivity(loadRecentActivity());
+    }
+  }, [mode]);
+
+  useEffect(() => {
+    if (mode === 'idle') {
+      setSchedule(calculateSchedule(selectedDuration, skipBreaks));
     }
   }, [selectedDuration, skipBreaks, mode]);
 
-  // Notify parent of session state changes
   useEffect(() => {
-    onSessionStateChange?.(mode !== 'idle');
+    onSessionStateChange?.(mode !== 'idle' && mode !== 'paused');
   }, [mode, onSessionStateChange]);
 
-  // Handle pending actions from parent (overlay clicks)
   useEffect(() => {
-    if (!pendingAction) return;
-
-    console.log('[ActivityStatus] Handling pending action:', pendingAction);
-
-    switch (pendingAction) {
-      case 'resume':
-        handleResume();
-        break;
-      case 'end':
-        handleEndSession();
-        break;
-      case 'pause':
-        handlePause();
-        break;
-    }
-  }, [pendingAction]);
-
-  // Listen for auto-pause events from nudge system
-  useEffect(() => {
-    if (!window.electronAPI?.activity?.onSessionAutoPaused) return;
-
-    const cleanup = window.electronAPI.activity.onSessionAutoPaused(() => {
-      console.log('[ActivityStatus] Session auto-paused by nudge system');
-      handlePause();
-    });
-
-    return cleanup;
-  }, []);
-
-  // Main timer loop
-  useEffect(() => {
-    if (mode !== 'focus' && mode !== 'break') {
+    if (mode === 'idle' || mode === 'paused') {
+      clearTimer();
       return;
     }
 
     timerRef.current = setInterval(() => {
-      setTotalTimeRemaining(prev => {
-        if (prev <= 1) {
-          handleSessionComplete();
-          return 0;
-        }
-        return prev - 1;
-      });
-
+      setTotalTimeRemaining(prev => Math.max(0, prev - 1));
       setPhaseTimeRemaining(prev => {
         if (prev <= 1) {
           handlePhaseComplete();
@@ -265,10 +286,77 @@ export function ActivityStatus({
   }, []);
 
   const handlePause = useCallback(() => {
-    console.log('[ActivityStatus] Pausing session');
     clearTimer();
     setMode('paused');
   }, [clearTimer]);
+
+  // === GAMIFICATION HANDLERS ===
+  const handleAwardPoints = useCallback((focusMinutes: number) => {
+    if (focusMinutes <= 0) return;
+
+    // Award points through gamification system
+    const result = awardPointsForSession(focusMinutes);
+
+    // Update daily challenges
+    updateChallengeProgress(focusMinutes);
+
+    // Show points popup
+    setPointsResult(result);
+    setShowPointsPopup(true);
+
+    // Queue level up if it occurred
+    if (result.leveledUp && result.previousLevel && result.newLevel) {
+      setLevelUpData({
+        previous: result.previousLevel,
+        new: result.newLevel,
+      });
+    }
+
+    // Queue any new achievements
+    if (result.newAchievements && result.newAchievements.length > 0) {
+      setAchievementQueue(prev => [...prev, ...result.newAchievements]);
+    }
+
+    // Refresh the level progress bar
+    setGamificationRefreshKey(k => k + 1);
+  }, []);
+
+  const handlePointsPopupClose = useCallback(() => {
+    setShowPointsPopup(false);
+    setPointsResult(null);
+
+    // Show level up modal if queued
+    if (levelUpData) {
+      setShowLevelUp(true);
+    } else if (achievementQueue.length > 0) {
+      // Otherwise show first achievement
+      setCurrentAchievement(achievementQueue[0]);
+      setAchievementQueue(prev => prev.slice(1));
+    }
+  }, [levelUpData, achievementQueue]);
+
+  const handleLevelUpClose = useCallback(() => {
+    setShowLevelUp(false);
+    setLevelUpData(null);
+
+    // Show first achievement if queued
+    if (achievementQueue.length > 0) {
+      setCurrentAchievement(achievementQueue[0]);
+      setAchievementQueue(prev => prev.slice(1));
+    }
+  }, [achievementQueue]);
+
+  const handleAchievementClose = useCallback(() => {
+    setCurrentAchievement(null);
+
+    // Show next achievement after a brief delay
+    if (achievementQueue.length > 0) {
+      setTimeout(() => {
+        setCurrentAchievement(achievementQueue[0]);
+        setAchievementQueue(prev => prev.slice(1));
+      }, 300);
+    }
+  }, [achievementQueue]);
 
   const handlePhaseComplete = useCallback(() => {
     const nextIndex = currentPhaseIndex + 1;
@@ -289,20 +377,11 @@ export function ActivityStatus({
     const isBreak = nextPhase.type === 'break';
     showNotification(
       isBreak ? '☕ Time for a break!' : '⏰ Break over!',
-      isBreak
-        ? `Take ${nextPhase.duration} minutes to rest and recharge.`
-        : 'Back to focus mode! You got this!'
+      isBreak ? `Take ${nextPhase.duration} minutes to rest.` : 'Back to focus mode!'
     );
   }, [currentPhaseIndex, schedule]);
 
   const handleStartSession = async () => {
-    console.log(
-      '[ActivityStatus] Starting session:',
-      selectedDuration,
-      'min, skipBreaks:',
-      skipBreaks
-    );
-
     const sessionSchedule = calculateSchedule(selectedDuration, skipBreaks);
     setSchedule(sessionSchedule);
 
@@ -315,15 +394,12 @@ export function ActivityStatus({
     setTotalBreakTime(0);
 
     setMode('focus');
-
     await startSession();
-    showNotification('🎯 Focus session started', `${selectedDuration} minutes. Let's do this!`);
+    showNotification('🎯 Focus session started', `${selectedDuration} minutes. Let's go!`);
   };
 
   const handleSessionComplete = useCallback(() => {
-    console.log('[ActivityStatus] Session complete');
     clearTimer();
-
     const focusMinutes = Math.round(totalFocusTime / 60);
 
     const newProgress = {
@@ -333,22 +409,27 @@ export function ActivityStatus({
     };
     setDailyProgress(newProgress);
     saveDailyProgress(newProgress);
-
-    saveSession(focusMinutes, Math.round(totalBreakTime / 60));
+    saveSessionToWrapped(totalFocusTime, totalBreakTime, selectedDuration, true);
 
     setMode('idle');
     endSession();
+    setRecentActivity(loadRecentActivity());
+    showNotification('🎉 Session complete!', `You focused for ${focusMinutes} minutes.`);
 
-    showNotification(
-      '🎉 Session complete!',
-      `Great work! You focused for ${focusMinutes} minutes.`
-    );
-  }, [clearTimer, totalFocusTime, totalBreakTime, dailyProgress, endSession]);
+    // === AWARD GAMIFICATION POINTS ===
+    handleAwardPoints(focusMinutes);
+  }, [
+    clearTimer,
+    totalFocusTime,
+    totalBreakTime,
+    dailyProgress,
+    selectedDuration,
+    endSession,
+    handleAwardPoints,
+  ]);
 
   const handleEndSession = async () => {
-    console.log('[ActivityStatus] Ending session early');
     clearTimer();
-
     const focusMinutes = Math.round(totalFocusTime / 60);
 
     if (focusMinutes > 0) {
@@ -359,951 +440,1008 @@ export function ActivityStatus({
       };
       setDailyProgress(newProgress);
       saveDailyProgress(newProgress);
-      saveSession(focusMinutes, Math.round(totalBreakTime / 60));
-
+      saveSessionToWrapped(totalFocusTime, totalBreakTime, selectedDuration, false);
       showNotification('✅ Session ended', `You focused for ${focusMinutes} minutes.`);
     }
 
     setMode('idle');
     await endSession();
+    setRecentActivity(loadRecentActivity());
+
+    // === AWARD GAMIFICATION POINTS (also when ending early) ===
+    handleAwardPoints(focusMinutes);
   };
 
   const handleResume = async () => {
-    console.log('[ActivityStatus] Resuming session');
-
     const currentPhase = schedule.schedule[currentPhaseIndex];
     setMode(currentPhase?.type || 'focus');
-
     await resumeSession();
   };
 
   const handleSkipBreak = useCallback(() => {
-    console.log('[ActivityStatus] Skipping break');
     handlePhaseComplete();
   }, [handlePhaseComplete]);
 
   const showNotification = (title: string, body: string) => {
-    console.log('[ActivityStatus] Notification:', title, body);
     window.electronAPI?.showNotification?.(title, body);
   };
 
-  const saveSession = (focusMinutes: number, breakMinutes: number) => {
-    try {
-      const sessions = JSON.parse(localStorage.getItem('focus-friend-sessions') || '[]');
-      sessions.push({
-        date: new Date().toISOString().split('T')[0],
-        endTime: new Date().toISOString(),
-        focusTime: focusMinutes * 60,
-        breakTime: breakMinutes * 60,
-        duration: selectedDuration,
-        completed: focusMinutes >= selectedDuration - 5,
-      });
-      if (sessions.length > 100) sessions.shift();
-      localStorage.setItem('focus-friend-sessions', JSON.stringify(sessions));
-    } catch (e) {
-      console.error('Error saving session:', e);
-    }
-  };
-
   const adjustDuration = (delta: number) => {
-    setSelectedDuration(prev => {
-      const newValue = prev + delta;
-      return Math.min(MAX_DURATION, Math.max(MIN_DURATION, newValue));
-    });
+    setSelectedDuration(prev => Math.min(MAX_DURATION, Math.max(MIN_DURATION, prev + delta)));
   };
 
-  // Calculate progress percentages
-  const phaseProgress =
-    phaseTimeTotal > 0 ? ((phaseTimeTotal - phaseTimeRemaining) / phaseTimeTotal) * 100 : 0;
+  // Task handlers
+  const addTask = () => {
+    if (!newTaskText.trim()) return;
+    const newTask: Task = {
+      id: `task_${Date.now()}`,
+      text: newTaskText.trim(),
+      completed: false,
+      createdAt: new Date().toISOString(),
+    };
+    const updated = [...tasks, newTask];
+    setTasks(updated);
+    saveTasks(updated);
+    setNewTaskText('');
+  };
 
-  const totalProgress =
-    selectedDuration * 60 > 0
-      ? ((selectedDuration * 60 - totalTimeRemaining) / (selectedDuration * 60)) * 100
-      : 0;
+  const toggleTask = (id: string) => {
+    const updated = tasks.map(t => (t.id === id ? { ...t, completed: !t.completed } : t));
+    setTasks(updated);
+    saveTasks(updated);
+  };
 
-  // Daily goal calculations
+  const deleteTask = (id: string) => {
+    const updated = tasks.filter(t => t.id !== id);
+    setTasks(updated);
+    saveTasks(updated);
+  };
+
+  // Goal edit handlers
+  const startEditingGoal = () => {
+    setEditGoalValue(String(dailyProgress.goalMinutes));
+    setIsEditingGoal(true);
+  };
+
+  const saveGoal = () => {
+    const newGoal = parseInt(editGoalValue, 10);
+    if (!isNaN(newGoal) && newGoal >= 5 && newGoal <= 1440) {
+      const updated = { ...dailyProgress, goalMinutes: newGoal };
+      setDailyProgress(updated);
+      saveDailyProgress(updated);
+    }
+    setIsEditingGoal(false);
+  };
+
+  const cancelEditingGoal = () => {
+    setIsEditingGoal(false);
+  };
+
+  // Calculations
   const goalProgress = Math.min(
     100,
     (dailyProgress.totalFocusMinutes / dailyProgress.goalMinutes) * 100
   );
-  const goalHours = Math.floor(dailyProgress.goalMinutes / 60);
   const completedHours = Math.floor(dailyProgress.totalFocusMinutes / 60);
   const completedMins = dailyProgress.totalFocusMinutes % 60;
-
   const breaksAvailable = selectedDuration >= MIN_SESSION_FOR_BREAK;
 
+  // Format time display (digital clock style)
+  const formatDigitalTime = (minutes: number) => {
+    return minutes.toString().padStart(2, '0');
+  };
+
+  const formatTimer = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
   return (
-    <div className="focus-sessions">
-      {/* Left Panel - Session Setup / Timer */}
-      <div className="panel session-panel">
-        {mode === 'idle' ? (
-          <>
-            <div className="panel-header">
-              <h2>Get ready to focus</h2>
-              <p className="subtitle">
-                We'll help you stay on track. For longer sessions, we'll add short breaks so you can
-                recharge.
-              </p>
-            </div>
-
-            {/* Duration Selector */}
-            <div className="duration-selector">
-              <button
-                className="duration-btn up"
-                onClick={() => adjustDuration(STEP)}
-                disabled={selectedDuration >= MAX_DURATION}
-                aria-label="Increase duration"
-              >
-                <span className="arrow">▲</span>
-              </button>
-
-              <div className="duration-display">
-                <span className="duration-value">{selectedDuration}</span>
-                <span className="duration-unit">mins</span>
-              </div>
-
-              <button
-                className="duration-btn down"
-                onClick={() => adjustDuration(-STEP)}
-                disabled={selectedDuration <= MIN_DURATION}
-                aria-label="Decrease duration"
-              >
-                <span className="arrow">▼</span>
-              </button>
-            </div>
-
-            {/* Break Info */}
-            <div className="break-info">
-              {breaksAvailable ? (
-                <>
-                  <p>
-                    {skipBreaks
-                      ? 'No breaks (you chose to skip them)'
-                      : schedule.totalBreaks > 0
-                        ? `You'll have ${schedule.totalBreaks} break${schedule.totalBreaks > 1 ? 's' : ''}`
-                        : 'No breaks needed for this duration'}
-                  </p>
-
-                  <label className="skip-breaks">
-                    <input
-                      type="checkbox"
-                      checked={skipBreaks}
-                      onChange={e => setSkipBreaks(e.target.checked)}
-                    />
-                    <span className="checkbox-custom"></span>
-                    <span className="checkbox-label">Skip breaks</span>
-                  </label>
-                </>
-              ) : (
-                <p>No breaks for sessions under {MIN_SESSION_FOR_BREAK} minutes</p>
-              )}
-            </div>
-
-            {/* Schedule Preview */}
-            {schedule.totalBreaks > 0 && !skipBreaks && (
-              <div className="schedule-preview">
-                <p className="schedule-title">Session breakdown:</p>
-                <div className="schedule-items">
-                  {schedule.schedule.map((phase, i) => (
-                    <div key={i} className={`schedule-item ${phase.type}`}>
-                      <span className="schedule-icon">{phase.type === 'focus' ? '🎯' : '☕'}</span>
-                      <span className="schedule-duration">{phase.duration}m</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <button className="btn-start" onClick={handleStartSession}>
-              <span className="play-icon">▶</span>
-              Start focus session
-            </button>
-          </>
-        ) : mode === 'paused' ? (
-          <>
-            <div className="panel-header">
-              <h2>⏸️ Session Paused</h2>
-              <p className="subtitle">
-                {formatIdleTime(totalTimeRemaining)} remaining in your session
-              </p>
-            </div>
-
-            <div className="paused-info">
-              <div className="paused-stats">
-                <div className="paused-stat">
-                  <span className="paused-stat-value">{formatIdleTime(totalFocusTime)}</span>
-                  <span className="paused-stat-label">Focus time</span>
-                </div>
-                <div className="paused-stat">
-                  <span className="paused-stat-value">{formatIdleTime(totalBreakTime)}</span>
-                  <span className="paused-stat-label">Break time</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="paused-actions">
-              <button className="btn-start" onClick={handleResume}>
-                <span className="play-icon">▶</span>
-                Resume session
-              </button>
-
-              <button className="btn-stop" onClick={handleEndSession}>
-                End session
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            {/* Active Timer */}
-            <div className="panel-header">
-              <h2>{mode === 'break' ? '☕ Break time' : '🎯 Stay focused'}</h2>
-              <p className="subtitle">
-                {mode === 'break'
-                  ? 'Take a moment to rest your eyes and stretch'
-                  : `Focus period ${Math.floor(currentPhaseIndex / 2) + 1} of ${schedule.focusPeriods}`}
-              </p>
-            </div>
-
-            <div className="timer-display">
-              <div className={`timer-ring ${mode}`}>
-                <svg viewBox="0 0 200 200">
-                  <circle className="timer-bg" cx="100" cy="100" r="85" />
-                  <circle
-                    className="timer-progress"
-                    cx="100"
-                    cy="100"
-                    r="85"
-                    style={{
-                      strokeDasharray: 534,
-                      strokeDashoffset: 534 - (534 * phaseProgress) / 100,
-                    }}
-                  />
-                </svg>
-                <div className="timer-center">
-                  <span className="timer-value">{formatIdleTime(phaseTimeRemaining)}</span>
-                  <span className="timer-phase">{mode === 'break' ? 'Break' : 'Focus'}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Overall session progress */}
-            <div className="session-progress">
-              <div className="progress-bar">
-                <div className="progress-fill" style={{ width: `${totalProgress}%` }} />
-              </div>
-              <div className="progress-labels">
-                <span className="progress-text">
-                  {formatIdleTime(totalTimeRemaining)} remaining
-                </span>
-                <span className="progress-percent">{Math.round(totalProgress)}%</span>
-              </div>
-            </div>
-
-            {/* Session stats during active session */}
-            <div className="active-stats">
-              <div className="active-stat">
-                <span className="active-stat-icon">🎯</span>
-                <span className="active-stat-value">{formatIdleTime(totalFocusTime)}</span>
-                <span className="active-stat-label">Focused</span>
-              </div>
-              {totalBreakTime > 0 && (
-                <div className="active-stat">
-                  <span className="active-stat-icon">☕</span>
-                  <span className="active-stat-value">{formatIdleTime(totalBreakTime)}</span>
-                  <span className="active-stat-label">Breaks</span>
-                </div>
-              )}
-            </div>
-
-            <div className="timer-actions">
-              {mode === 'break' && (
-                <button className="btn-secondary" onClick={handleSkipBreak}>
-                  ⏭️ Skip break
-                </button>
-              )}
-              <button className="btn-pause" onClick={handlePause}>
-                ⏸️ Pause
-              </button>
-              <button className="btn-stop" onClick={handleEndSession}>
-                Stop session
-              </button>
-            </div>
-          </>
-        )}
+    <div className={`focus-dashboard ${mode !== 'idle' ? `mode-${mode}` : ''}`}>
+      {/* Welcome Header */}
+      <div className="welcome-header">
+        <div className="welcome-text">
+          <h2>Welcome back, Friend!</h2>
+          <p>Your week is off to a great start.</p>
+        </div>
       </div>
 
-      {/* Right Panel - Daily Progress */}
-      <div className="panel progress-panel">
-        <div className="panel-header">
-          <h2>Daily progress</h2>
-        </div>
+      {/* === LEVEL PROGRESS BAR (re-added) === */}
+      <div className="level-section">
+        <LevelProgressBar variant="compact" refreshKey={gamificationRefreshKey} />
+      </div>
 
-        <div className="progress-ring-container">
-          <div className="stats-row">
-            <div className="stat-item">
-              <span className="stat-value">{yesterdayMinutes}</span>
-              <span className="stat-label">Yesterday</span>
-              <span className="stat-unit">minutes</span>
-            </div>
+      {/* Main Grid */}
+      <div className="dashboard-grid">
+        {/* Timer Card */}
+        <div className="card timer-card">
+          {mode === 'idle' ? (
+            <>
+              <div className="card-header">
+                <span>Ready to focus?</span>
+              </div>
 
-            <div className="daily-goal-ring">
-              <svg viewBox="0 0 160 160">
-                <circle className="goal-bg" cx="80" cy="80" r="70" />
-                <circle
-                  className="goal-progress"
-                  cx="80"
-                  cy="80"
-                  r="70"
+              <div className="digital-timer">
+                <span className="digital-value">{formatDigitalTime(selectedDuration)}</span>
+                <span className="digital-unit">min</span>
+              </div>
+
+              <div className="timer-controls">
+                <button
+                  className="control-btn"
+                  onClick={() => adjustDuration(STEP)}
+                  disabled={selectedDuration >= MAX_DURATION}
+                >
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <path d="M12 5v14M5 12h14" />
+                  </svg>
+                </button>
+                <button
+                  className="control-btn"
+                  onClick={() => adjustDuration(-STEP)}
+                  disabled={selectedDuration <= MIN_DURATION}
+                >
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <path d="M5 12h14" />
+                  </svg>
+                </button>
+
+                {breaksAvailable && (
+                  <button
+                    className={`break-toggle-btn ${!skipBreaks ? 'active' : ''}`}
+                    onClick={() => setSkipBreaks(!skipBreaks)}
+                  >
+                    <span className="toggle-indicator" />
+                    {skipBreaks ? 'No breaks' : `${schedule.totalBreaks} break`}
+                  </button>
+                )}
+              </div>
+
+              <button className="start-btn" onClick={handleStartSession}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+                Start Session
+              </button>
+            </>
+          ) : mode === 'paused' ? (
+            <>
+              <div className="paused-badge">PAUSED</div>
+              <div className="digital-timer paused">
+                <span className="digital-value">{formatTimer(phaseTimeRemaining)}</span>
+              </div>
+              <div className="paused-actions">
+                <button className="start-btn" onClick={handleResume}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M8 5v14l11-7z" />
+                  </svg>
+                  Resume
+                </button>
+                <button className="ghost-btn" onClick={handleEndSession}>
+                  End Session
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className={`mode-badge ${mode}`}>
+                {mode === 'break' ? '☕ BREAK' : '🎯 FOCUS'}
+              </div>
+              <div className={`digital-timer ${mode}`}>
+                <span className="digital-value">{formatTimer(phaseTimeRemaining)}</span>
+              </div>
+              <div className="progress-bar-container">
+                <div
+                  className="progress-fill"
                   style={{
-                    strokeDasharray: 440,
-                    strokeDashoffset: 440 - (440 * goalProgress) / 100,
+                    width: `${((phaseTimeTotal - phaseTimeRemaining) / phaseTimeTotal) * 100}%`,
                   }}
                 />
-              </svg>
-              <div className="goal-center">
-                <span className="goal-label">Daily goal</span>
-                <span className="goal-value">{goalHours}</span>
-                <span className="goal-unit">hours</span>
               </div>
-            </div>
+              <div className="timer-actions">
+                {mode === 'break' && (
+                  <button className="control-btn small" onClick={handleSkipBreak}>
+                    Skip
+                  </button>
+                )}
+                <button className="control-btn small" onClick={handlePause}>
+                  Pause
+                </button>
+                <button className="control-btn small danger" onClick={handleEndSession}>
+                  End
+                </button>
+              </div>
+            </>
+          )}
+        </div>
 
-            <div className="stat-item">
-              <span className="stat-value">{dailyProgress.streak}</span>
-              <span className="stat-label">Streak</span>
-              <span className="stat-unit">days</span>
+        {/* Today's Progress Card */}
+        <div className="card progress-card">
+          <div className="card-header">
+            <span>Today's Progress</span>
+            <button className="edit-goal-btn" onClick={startEditingGoal} title="Edit daily goal">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+              </svg>
+            </button>
+          </div>
+
+          <div className="progress-ring-wrapper">
+            <svg className="progress-ring" viewBox="0 0 120 120">
+              <circle
+                cx="60"
+                cy="60"
+                r="50"
+                fill="none"
+                stroke="var(--border-subtle)"
+                strokeWidth="8"
+              />
+              <circle
+                cx="60"
+                cy="60"
+                r="50"
+                fill="none"
+                stroke="var(--accent-green)"
+                strokeWidth="8"
+                strokeLinecap="round"
+                strokeDasharray="314"
+                strokeDashoffset={314 - (314 * goalProgress) / 100}
+                transform="rotate(-90 60 60)"
+              />
+            </svg>
+            <div className="ring-text">
+              <span className="ring-percent">{Math.round(goalProgress)}%</span>
+              <span className="ring-label">of goal</span>
             </div>
           </div>
 
-          <p className="completed-text">
-            Completed:{' '}
-            {completedHours > 0 ? `${completedHours} hour${completedHours !== 1 ? 's' : ''}, ` : ''}
-            {completedMins} minute{completedMins !== 1 ? 's' : ''}
-          </p>
-        </div>
-
-        {/* Goal Setting */}
-        <div className="goal-setting">
-          <label htmlFor="goal-select">Daily goal:</label>
-          <select
-            id="goal-select"
-            value={dailyProgress.goalMinutes}
-            onChange={e => {
-              const newGoal = parseInt(e.target.value);
-              const newProgress = { ...dailyProgress, goalMinutes: newGoal };
-              setDailyProgress(newProgress);
-              saveDailyProgress(newProgress);
-            }}
-          >
-            <option value={30}>30 minutes</option>
-            <option value={60}>1 hour</option>
-            <option value={90}>1.5 hours</option>
-            <option value={120}>2 hours</option>
-            <option value={180}>3 hours</option>
-            <option value={240}>4 hours</option>
-            <option value={300}>5 hours</option>
-            <option value={360}>6 hours</option>
-          </select>
-        </div>
-
-        {/* Sessions Today */}
-        <div className="sessions-summary">
-          <div className="summary-item">
-            <span className="summary-icon">📊</span>
-            <span className="summary-text">
-              <strong>{dailyProgress.sessionsCompleted}</strong> session
-              {dailyProgress.sessionsCompleted !== 1 ? 's' : ''} today
-            </span>
-          </div>
-          {dailyProgress.streak > 0 && (
-            <div className="summary-item streak">
-              <span className="summary-icon">🔥</span>
-              <span className="summary-text">
-                <strong>{dailyProgress.streak}</strong> day streak!
+          <div className="time-summary">
+            {completedHours > 0 ? `${completedHours}h ${completedMins}m` : `${completedMins}m`}
+            {isEditingGoal ? (
+              <span className="goal-edit-wrap">
+                {' / '}
+                <input
+                  type="number"
+                  className="goal-input"
+                  value={editGoalValue}
+                  onChange={e => setEditGoalValue(e.target.value)}
+                  onBlur={saveGoal}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') saveGoal();
+                    if (e.key === 'Escape') cancelEditingGoal();
+                  }}
+                  min={5}
+                  max={1440}
+                  autoFocus
+                />
+                <span className="goal-unit">min goal</span>
               </span>
+            ) : (
+              <span className="time-goal">
+                {' '}
+                / {Math.floor(dailyProgress.goalMinutes / 60)}h {dailyProgress.goalMinutes % 60}m
+                goal
+              </span>
+            )}
+          </div>
+
+          <div className="stats-list">
+            <div className="stat-row">
+              <span className="stat-icon">🕐</span>
+              <span className="stat-name">Sessions:</span>
+              <span className="stat-value">{dailyProgress.sessionsCompleted}</span>
+            </div>
+            <div className="stat-row">
+              <span className="stat-icon">📅</span>
+              <span className="stat-name">Yesterday:</span>
+              <span className="stat-value orange">
+                {yesterdayMinutes > 0 ? `${Math.floor(yesterdayMinutes / 60)}h` : '0m'}
+              </span>
+            </div>
+            <div className="stat-row">
+              <span className="stat-icon">🔥</span>
+              <span className="stat-name">Streak:</span>
+              <span className="stat-value green">{dailyProgress.streak}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Recent Activity Card */}
+        <div className="card activity-card">
+          <div className="card-header">
+            <span>Recent Activity</span>
+          </div>
+
+          {recentActivity.length === 0 ? (
+            <div className="empty-state">
+              <p>No sessions yet today</p>
+              <span>Start a focus session to see your activity</span>
+            </div>
+          ) : (
+            <div className="activity-list">
+              {recentActivity.slice(0, 4).map(activity => (
+                <div key={activity.id} className="activity-item">
+                  <span className="activity-check">✓</span>
+                  <div className="activity-info">
+                    <span className="activity-label">
+                      {activity.label} ({activity.duration}m)
+                    </span>
+                    <span className="activity-status">
+                      {activity.type === 'completed' ? 'Completed' : 'Ended early'}
+                    </span>
+                  </div>
+                  <span className="activity-time">{formatTimeAgo(activity.timestamp)}</span>
+                </div>
+              ))}
             </div>
           )}
         </div>
+
+        {/* Tasks Card */}
+        <div className="card tasks-card">
+          <div className="card-header">
+            <span>Your Tasks</span>
+          </div>
+
+          <div className="task-input">
+            <input
+              type="text"
+              placeholder="Add a task..."
+              value={newTaskText}
+              onChange={e => setNewTaskText(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && addTask()}
+            />
+            <button className="add-task-btn" onClick={addTask}>
+              +
+            </button>
+          </div>
+
+          <div className="task-list">
+            {tasks.slice(0, 5).map(task => (
+              <div key={task.id} className={`task-item ${task.completed ? 'completed' : ''}`}>
+                <button className="task-checkbox" onClick={() => toggleTask(task.id)}>
+                  {task.completed && '✓'}
+                </button>
+                <span className="task-text">{task.text}</span>
+                <button className="task-delete" onClick={() => deleteTask(task.id)}>
+                  ×
+                </button>
+              </div>
+            ))}
+            {tasks.length === 0 && (
+              <div className="empty-state small">
+                <p>No tasks yet</p>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
+      {/* Focus Wrapped Banner */}
+      <div className="wrapped-banner">
+        <FocusWrappedButton variant="banner" period="week" />
+      </div>
+
+      {/* === GAMIFICATION MODALS (re-added) === */}
+      {showPointsPopup && pointsResult && (
+        <PointsPopup
+          result={pointsResult}
+          level={getLevelForXP(pointsResult.newTotalXP)}
+          onClose={handlePointsPopupClose}
+          autoCloseDelay={4000}
+        />
+      )}
+
+      {showLevelUp && levelUpData && (
+        <LevelUpModal
+          previousLevel={levelUpData.previous}
+          newLevel={levelUpData.new}
+          onClose={handleLevelUpClose}
+        />
+      )}
+
+      {currentAchievement && (
+        <AchievementToast achievement={currentAchievement} onClose={handleAchievementClose} />
+      )}
+
       <style>{`
-        .focus-sessions {
+        /* === LAYOUT === */
+        .focus-dashboard {
+          max-width: 1100px;
+          margin: 0 auto;
+        }
+
+        /* === WELCOME HEADER === */
+        .welcome-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: var(--space-4, 16px);
+        }
+
+        .welcome-text h2 {
+          font-size: 1.25rem;
+          font-weight: 600;
+          color: var(--text-primary, #FFFFFF);
+          margin-bottom: 2px;
+        }
+
+        .welcome-text p {
+          font-size: 0.85rem;
+          color: var(--text-muted, #737373);
+        }
+
+        /* === LEVEL SECTION === */
+        .level-section {
+          margin-bottom: var(--space-5, 20px);
+        }
+
+        /* === GRID === */
+        .dashboard-grid {
           display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: var(--spacing-lg);
+          grid-template-columns: 1.2fr 1fr;
+          grid-template-rows: auto auto;
+          gap: var(--space-4, 16px);
         }
 
         @media (max-width: 800px) {
-          .focus-sessions {
+          .dashboard-grid {
             grid-template-columns: 1fr;
           }
         }
 
-        .panel {
-          background: var(--color-bg-card);
-          border-radius: var(--radius-xl);
-          padding: var(--spacing-xl);
-          border: 1px solid var(--color-border);
+        /* === CARDS === */
+        .card {
+          background: var(--bg-card, #1A1A1A);
+          border: 1px solid var(--border-subtle, #2A2A2A);
+          border-radius: var(--radius-xl, 24px);
+          padding: var(--space-5, 20px);
         }
 
-        .panel-header {
-          margin-bottom: var(--spacing-lg);
-        }
-
-        .panel-header h2 {
-          font-size: var(--font-size-xl);
-          font-weight: 600;
-          margin-bottom: var(--spacing-xs);
-        }
-
-        .subtitle {
-          color: var(--color-text-secondary);
-          font-size: var(--font-size-sm);
-          line-height: 1.5;
-        }
-
-        /* Duration Selector */
-        .duration-selector {
+        .card-header {
           display: flex;
-          flex-direction: column;
+          justify-content: space-between;
           align-items: center;
-          margin: var(--spacing-xl) 0;
+          margin-bottom: var(--space-4, 16px);
+          font-size: 0.9rem;
+          font-weight: 500;
+          color: var(--text-secondary, #A3A3A3);
         }
 
-        .duration-btn {
-          background: transparent;
-          border: none;
+        /* === TIMER CARD === */
+        .timer-card {
+          grid-row: 1;
+          grid-column: 1;
+          text-align: center;
+          border-color: rgba(74, 222, 128, 0.2);
+        }
+
+        .digital-timer {
+          margin: var(--space-6, 24px) 0;
+        }
+
+        .digital-value {
+          font-family: 'SF Mono', 'Consolas', monospace;
+          font-size: 5rem;
+          font-weight: 700;
+          color: var(--accent-green, #4ADE80);
+          letter-spacing: -2px;
+          text-shadow: 0 0 30px rgba(74, 222, 128, 0.3);
+        }
+
+        .digital-unit {
+          font-size: 1.5rem;
+          color: var(--text-muted, #737373);
+          margin-left: var(--space-2, 8px);
+        }
+
+        .digital-timer.paused .digital-value,
+        .digital-timer.break .digital-value {
+          color: var(--accent-orange, #FB923C);
+          text-shadow: 0 0 30px rgba(251, 146, 60, 0.3);
+        }
+
+        .timer-controls {
+          display: flex;
+          justify-content: center;
+          gap: var(--space-3, 12px);
+          margin-bottom: var(--space-5, 20px);
+        }
+
+        .control-btn {
+          width: 44px;
+          height: 44px;
+          background: var(--bg-elevated, #1C1C1C);
+          border: 1px solid var(--border-subtle, #2A2A2A);
+          border-radius: var(--radius-md, 12px);
+          color: var(--text-secondary, #A3A3A3);
           cursor: pointer;
-          padding: var(--spacing-sm) var(--spacing-lg);
-          color: var(--color-text-secondary);
-          transition: all var(--transition-fast);
-          border-radius: var(--radius-md);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.2s ease;
         }
 
-        .duration-btn:hover:not(:disabled) {
-          color: var(--color-text-primary);
-          background: var(--color-bg-hover);
+        .control-btn:hover:not(:disabled) {
+          border-color: var(--border-default, #333333);
+          color: var(--text-primary, #FFFFFF);
         }
 
-        .duration-btn:disabled {
+        .control-btn:disabled {
           opacity: 0.3;
           cursor: not-allowed;
         }
 
-        .arrow {
-          font-size: 1.2rem;
-          display: block;
+        .control-btn.small {
+          width: auto;
+          height: auto;
+          padding: var(--space-2, 8px) var(--space-4, 16px);
+          font-size: 0.85rem;
         }
 
-        .duration-display {
+        .control-btn.danger {
+          border-color: rgba(248, 113, 113, 0.3);
+          color: #F87171;
+        }
+
+        .break-toggle-btn {
           display: flex;
-          flex-direction: column;
           align-items: center;
-          justify-content: center;
-          padding: var(--spacing-lg) var(--spacing-2xl);
-          background: var(--color-bg-secondary);
-          border-radius: var(--radius-lg);
-          min-width: 140px;
-          border: 2px solid var(--color-border);
-          margin: var(--spacing-sm) 0;
-        }
-
-        .duration-value {
-          font-size: 3.5rem;
-          font-weight: 300;
-          line-height: 1;
-          font-variant-numeric: tabular-nums;
-        }
-
-        .duration-unit {
-          font-size: var(--font-size-sm);
-          color: var(--color-text-secondary);
-          margin-top: var(--spacing-xs);
-        }
-
-        /* Break Info */
-        .break-info {
-          text-align: center;
-          margin-bottom: var(--spacing-lg);
-        }
-
-        .break-info > p {
-          color: var(--color-text-secondary);
-          margin-bottom: var(--spacing-md);
-          font-size: var(--font-size-sm);
-        }
-
-        .skip-breaks {
-          display: inline-flex;
-          align-items: center;
-          gap: var(--spacing-sm);
+          gap: var(--space-2, 8px);
+          padding: var(--space-2, 8px) var(--space-4, 16px);
+          background: var(--bg-elevated, #1C1C1C);
+          border: 1px solid var(--border-subtle, #2A2A2A);
+          border-radius: var(--radius-full, 9999px);
+          color: var(--text-secondary, #A3A3A3);
+          font-size: 0.85rem;
           cursor: pointer;
-          color: var(--color-text-secondary);
-          font-size: var(--font-size-sm);
-          padding: var(--spacing-xs) var(--spacing-sm);
-          border-radius: var(--radius-md);
-          transition: background var(--transition-fast);
+          transition: all 0.2s ease;
         }
 
-        .skip-breaks:hover {
-          background: var(--color-bg-hover);
+        .break-toggle-btn .toggle-indicator {
+          width: 8px;
+          height: 8px;
+          background: var(--text-muted, #737373);
+          border-radius: 50%;
+          transition: background 0.2s ease;
         }
 
-        .skip-breaks input[type="checkbox"] {
-          width: 18px;
-          height: 18px;
-          accent-color: #0078d4;
-          cursor: pointer;
+        .break-toggle-btn.active .toggle-indicator {
+          background: var(--accent-green, #4ADE80);
         }
 
-        .checkbox-label {
-          user-select: none;
-        }
-
-        /* Schedule Preview */
-        .schedule-preview {
-          margin-bottom: var(--spacing-lg);
-          padding: var(--spacing-md);
-          background: var(--color-bg-secondary);
-          border-radius: var(--radius-md);
-        }
-
-        .schedule-title {
-          font-size: var(--font-size-xs);
-          color: var(--color-text-secondary);
-          margin-bottom: var(--spacing-sm);
-          text-align: center;
-        }
-
-        .schedule-items {
-          display: flex;
-          justify-content: center;
-          gap: var(--spacing-xs);
-          flex-wrap: wrap;
-        }
-
-        .schedule-item {
-          display: flex;
-          align-items: center;
-          gap: 4px;
-          padding: 4px 10px;
-          border-radius: var(--radius-sm);
-          font-size: var(--font-size-xs);
-          font-weight: 500;
-        }
-
-        .schedule-item.focus {
-          background: rgba(74, 222, 128, 0.15);
-          color: var(--color-success);
-        }
-
-        .schedule-item.break {
-          background: rgba(96, 165, 250, 0.15);
-          color: #60a5fa;
-        }
-
-        .schedule-icon {
-          font-size: 0.7rem;
-        }
-
-        /* Buttons */
-        .btn-start {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: var(--spacing-sm);
+        .start-btn {
           width: 100%;
-          padding: var(--spacing-md) var(--spacing-xl);
-          background: #0078d4;
-          color: white;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: var(--space-2, 8px);
+          padding: var(--space-4, 16px);
+          background: var(--accent-green, #4ADE80);
           border: none;
-          border-radius: var(--radius-md);
-          font-size: var(--font-size-base);
+          border-radius: var(--radius-lg, 16px);
+          font-size: 1rem;
           font-weight: 600;
+          color: var(--bg-base, #0C0C0C);
           cursor: pointer;
-          transition: all var(--transition-fast);
+          transition: all 0.2s ease;
         }
 
-        .btn-start:hover {
-          background: #106ebe;
-          transform: translateY(-1px);
+        .start-btn:hover {
+          background: #22C55E;
+          box-shadow: 0 0 20px rgba(74, 222, 128, 0.3);
         }
 
-        .play-icon {
-          font-size: 0.75rem;
+        .progress-bar-container {
+          height: 4px;
+          background: var(--border-subtle, #2A2A2A);
+          border-radius: 2px;
+          margin: var(--space-4, 16px) 0;
+          overflow: hidden;
         }
 
-        .btn-secondary {
-          padding: var(--spacing-sm) var(--spacing-lg);
-          background: var(--color-bg-secondary);
-          color: var(--color-text-primary);
-          border: 1px solid var(--color-border);
-          border-radius: var(--radius-md);
-          cursor: pointer;
-          font-size: var(--font-size-sm);
-          font-weight: 500;
-          transition: all var(--transition-fast);
+        .progress-fill {
+          height: 100%;
+          background: linear-gradient(90deg, var(--accent-green, #4ADE80), var(--accent-orange, #FB923C));
+          border-radius: 2px;
+          transition: width 0.3s ease;
         }
 
-        .btn-secondary:hover {
-          background: var(--color-bg-hover);
-          border-color: var(--color-text-secondary);
-        }
-
-        .btn-pause {
-          padding: var(--spacing-sm) var(--spacing-lg);
-          background: rgba(251, 191, 36, 0.1);
-          color: var(--color-warning);
-          border: 1px solid rgba(251, 191, 36, 0.3);
-          border-radius: var(--radius-md);
-          cursor: pointer;
-          font-size: var(--font-size-sm);
-          font-weight: 500;
-          transition: all var(--transition-fast);
-        }
-
-        .btn-pause:hover {
-          background: rgba(251, 191, 36, 0.2);
-          border-color: var(--color-warning);
-        }
-
-        .btn-stop {
-          padding: var(--spacing-sm) var(--spacing-lg);
-          background: transparent;
-          color: var(--color-text-secondary);
-          border: 1px solid var(--color-border);
-          border-radius: var(--radius-md);
-          cursor: pointer;
-          font-size: var(--font-size-sm);
-          transition: all var(--transition-fast);
-        }
-
-        .btn-stop:hover {
-          color: var(--color-error);
-          border-color: var(--color-error);
-          background: rgba(239, 68, 68, 0.1);
-        }
-
-        /* Paused State */
-        .paused-info {
-          margin-bottom: var(--spacing-xl);
-        }
-
-        .paused-stats {
+        .timer-actions {
           display: flex;
           justify-content: center;
-          gap: var(--spacing-xl);
+          gap: var(--space-3, 12px);
         }
 
-        .paused-stat {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          padding: var(--spacing-md);
-          background: var(--color-bg-secondary);
-          border-radius: var(--radius-md);
-          min-width: 100px;
-        }
-
-        .paused-stat-value {
-          font-size: var(--font-size-xl);
+        .mode-badge, .paused-badge {
+          display: inline-block;
+          padding: var(--space-2, 8px) var(--space-4, 16px);
+          border-radius: var(--radius-full, 9999px);
+          font-size: 0.8rem;
           font-weight: 600;
-          font-variant-numeric: tabular-nums;
+          margin-bottom: var(--space-3, 12px);
         }
 
-        .paused-stat-label {
-          font-size: var(--font-size-xs);
-          color: var(--color-text-secondary);
+        .mode-badge.focus {
+          background: rgba(74, 222, 128, 0.15);
+          color: var(--accent-green, #4ADE80);
+        }
+
+        .mode-badge.break, .paused-badge {
+          background: rgba(251, 146, 60, 0.15);
+          color: var(--accent-orange, #FB923C);
         }
 
         .paused-actions {
           display: flex;
           flex-direction: column;
-          gap: var(--spacing-md);
+          gap: var(--space-3, 12px);
         }
 
-        /* Timer Display */
-        .timer-display {
-          display: flex;
-          justify-content: center;
-          margin: var(--spacing-lg) 0;
-        }
-
-        .timer-ring {
-          position: relative;
-          width: 200px;
-          height: 200px;
-        }
-
-        .timer-ring svg {
-          width: 100%;
-          height: 100%;
-          transform: rotate(-90deg);
-        }
-
-        .timer-bg {
-          fill: none;
-          stroke: var(--color-bg-secondary);
-          stroke-width: 10;
-        }
-
-        .timer-progress {
-          fill: none;
-          stroke-width: 10;
-          stroke-linecap: round;
-          transition: stroke-dashoffset 1s linear;
-        }
-
-        .timer-ring.focus .timer-progress {
-          stroke: var(--color-success);
-        }
-
-        .timer-ring.break .timer-progress {
-          stroke: #60a5fa;
-        }
-
-        .timer-center {
-          position: absolute;
-          top: 50%;
-          left: 50%;
-          transform: translate(-50%, -50%);
-          text-align: center;
-        }
-
-        .timer-value {
-          display: block;
-          font-size: 2.75rem;
-          font-weight: 300;
-          font-variant-numeric: tabular-nums;
-        }
-
-        .timer-phase {
-          display: block;
-          font-size: var(--font-size-sm);
-          color: var(--color-text-secondary);
-          margin-top: var(--spacing-xs);
-        }
-
-        /* Session Progress */
-        .session-progress {
-          margin-bottom: var(--spacing-lg);
-        }
-
-        .progress-bar {
-          height: 6px;
-          background: var(--color-bg-secondary);
-          border-radius: 3px;
-          overflow: hidden;
-          margin-bottom: var(--spacing-sm);
-        }
-
-        .progress-fill {
-          height: 100%;
-          background: linear-gradient(90deg, var(--color-accent) 0%, #ff6b81 100%);
-          border-radius: 3px;
-          transition: width 1s linear;
-        }
-
-        .progress-labels {
-          display: flex;
-          justify-content: space-between;
-        }
-
-        .progress-text, .progress-percent {
-          font-size: var(--font-size-sm);
-          color: var(--color-text-secondary);
-        }
-
-        /* Active Stats */
-        .active-stats {
-          display: flex;
-          justify-content: center;
-          gap: var(--spacing-xl);
-          margin-bottom: var(--spacing-lg);
-        }
-
-        .active-stat {
-          display: flex;
-          align-items: center;
-          gap: var(--spacing-sm);
-        }
-
-        .active-stat-icon {
-          font-size: 1rem;
-        }
-
-        .active-stat-value {
-          font-weight: 600;
-          font-variant-numeric: tabular-nums;
-        }
-
-        .active-stat-label {
-          font-size: var(--font-size-sm);
-          color: var(--color-text-secondary);
-        }
-
-        .timer-actions {
-          display: flex;
-          gap: var(--spacing-md);
-          justify-content: center;
-        }
-
-        /* Daily Progress Panel */
-        .progress-ring-container {
-          text-align: center;
-        }
-
-        .stats-row {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          margin-bottom: var(--spacing-md);
-        }
-
-        .stat-item {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          min-width: 70px;
-        }
-
-        .stat-value {
-          font-size: var(--font-size-2xl);
-          font-weight: 600;
-          line-height: 1.2;
-        }
-
-        .stat-label {
-          font-size: var(--font-size-sm);
-          color: var(--color-text-secondary);
-        }
-
-        .stat-unit {
-          font-size: var(--font-size-xs);
-          color: var(--color-text-secondary);
-        }
-
-        .daily-goal-ring {
-          position: relative;
-          width: 160px;
-          height: 160px;
-        }
-
-        .daily-goal-ring svg {
-          width: 100%;
-          height: 100%;
-          transform: rotate(-90deg);
-        }
-
-        .goal-bg {
-          fill: none;
-          stroke: var(--color-bg-secondary);
-          stroke-width: 10;
-        }
-
-        .goal-progress {
-          fill: none;
-          stroke: #2dd4bf;
-          stroke-width: 10;
-          stroke-linecap: round;
-          transition: stroke-dashoffset 0.5s ease;
-        }
-
-        .goal-center {
-          position: absolute;
-          top: 50%;
-          left: 50%;
-          transform: translate(-50%, -50%);
-          text-align: center;
-        }
-
-        .goal-label {
-          display: block;
-          font-size: var(--font-size-xs);
-          color: var(--color-text-secondary);
-        }
-
-        .goal-value {
-          display: block;
-          font-size: 2.5rem;
-          font-weight: 300;
-          line-height: 1.1;
-        }
-
-        .goal-unit {
-          font-size: var(--font-size-sm);
-          color: var(--color-text-secondary);
-        }
-
-        .completed-text {
-          color: var(--color-text-secondary);
-          font-size: var(--font-size-sm);
-          margin-top: var(--spacing-md);
-        }
-
-        .goal-setting {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: var(--spacing-sm);
-          margin-top: var(--spacing-lg);
-          padding-top: var(--spacing-lg);
-          border-top: 1px solid var(--color-border);
-        }
-
-        .goal-setting label {
-          font-size: var(--font-size-sm);
-          color: var(--color-text-secondary);
-        }
-
-        .goal-setting select {
-          padding: var(--spacing-xs) var(--spacing-sm);
-          background: var(--color-bg-secondary);
-          border: 1px solid var(--color-border);
-          border-radius: var(--radius-sm);
-          color: var(--color-text-primary);
-          font-size: var(--font-size-sm);
+        .ghost-btn {
+          background: none;
+          border: none;
+          color: var(--text-muted, #737373);
+          font-size: 0.9rem;
           cursor: pointer;
         }
 
-        .goal-setting select:hover {
-          border-color: var(--color-text-secondary);
+        .ghost-btn:hover {
+          color: var(--text-secondary, #A3A3A3);
         }
 
-        /* Sessions Summary */
-        .sessions-summary {
-          margin-top: var(--spacing-lg);
-          display: flex;
-          flex-direction: column;
-          gap: var(--spacing-sm);
+        /* === PROGRESS CARD === */
+        .progress-card {
+          grid-row: 1;
+          grid-column: 2;
         }
 
-        .summary-item {
+        .progress-ring-wrapper {
+          position: relative;
+          width: 120px;
+          height: 120px;
+          margin: 0 auto var(--space-4, 16px);
+        }
+
+        .progress-ring {
+          width: 100%;
+          height: 100%;
+        }
+
+        .ring-text {
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          text-align: center;
+        }
+
+        .ring-percent {
+          display: block;
+          font-size: 1.5rem;
+          font-weight: 700;
+          color: var(--text-primary, #FFFFFF);
+        }
+
+        .ring-label {
+          font-size: 0.75rem;
+          color: var(--text-muted, #737373);
+        }
+
+        .time-summary {
+          text-align: center;
+          font-size: 0.9rem;
+          color: var(--text-primary, #FFFFFF);
+          margin-bottom: var(--space-4, 16px);
+        }
+
+        .time-goal {
+          color: var(--text-muted, #737373);
+        }
+
+        .edit-goal-btn {
+          background: none;
+          border: none;
+          color: var(--text-muted, #737373);
+          cursor: pointer;
+          padding: 4px;
+          border-radius: 6px;
           display: flex;
           align-items: center;
-          gap: var(--spacing-sm);
-          padding: var(--spacing-sm) var(--spacing-md);
-          background: var(--color-bg-secondary);
-          border-radius: var(--radius-md);
+          justify-content: center;
+          transition: all 0.2s ease;
         }
 
-        .summary-item.streak {
-          background: rgba(251, 191, 36, 0.1);
-          border: 1px solid rgba(251, 191, 36, 0.3);
+        .edit-goal-btn:hover {
+          color: var(--accent-green, #4ADE80);
+          background: rgba(74, 222, 128, 0.1);
         }
 
-        .summary-icon {
+        .goal-edit-wrap {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          color: var(--text-muted, #737373);
+        }
+
+        .goal-input {
+          width: 60px;
+          padding: 2px 8px;
+          background: var(--bg-elevated, #1C1C1C);
+          border: 1px solid var(--accent-green, #4ADE80);
+          border-radius: 6px;
+          color: var(--text-primary, #FFFFFF);
+          font-size: 0.9rem;
+          font-weight: 600;
+          text-align: center;
+          outline: none;
+          -moz-appearance: textfield;
+        }
+
+        .goal-input::-webkit-outer-spin-button,
+        .goal-input::-webkit-inner-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+
+        .goal-unit {
+          font-size: 0.85rem;
+          color: var(--text-muted, #737373);
+        }
+
+        .stats-list {
+          display: flex;
+          flex-direction: column;
+          gap: var(--space-3, 12px);
+        }
+
+        .stat-row {
+          display: flex;
+          align-items: center;
+          gap: var(--space-3, 12px);
+          padding: var(--space-3, 12px);
+          background: var(--bg-elevated, #1C1C1C);
+          border-radius: var(--radius-md, 12px);
+        }
+
+        .stat-icon {
           font-size: 1rem;
         }
 
-        .summary-text {
-          font-size: var(--font-size-sm);
-          color: var(--color-text-secondary);
+        .stat-name {
+          flex: 1;
+          font-size: 0.85rem;
+          color: var(--text-secondary, #A3A3A3);
         }
 
-        .summary-text strong {
-          color: var(--color-text-primary);
+        .stat-value {
+          font-weight: 600;
+          color: var(--text-primary, #FFFFFF);
+          padding: var(--space-1, 4px) var(--space-3, 12px);
+          background: var(--bg-card, #1A1A1A);
+          border-radius: var(--radius-sm, 8px);
+        }
+
+        .stat-value.orange { color: var(--accent-orange, #FB923C); }
+        .stat-value.green { color: var(--accent-green, #4ADE80); }
+
+        /* === ACTIVITY CARD === */
+        .activity-card {
+          grid-row: 2;
+          grid-column: 1;
+        }
+
+        .activity-list {
+          display: flex;
+          flex-direction: column;
+          gap: var(--space-3, 12px);
+        }
+
+        .activity-item {
+          display: flex;
+          align-items: center;
+          gap: var(--space-3, 12px);
+        }
+
+        .activity-check {
+          width: 24px;
+          height: 24px;
+          background: rgba(74, 222, 128, 0.15);
+          color: var(--accent-green, #4ADE80);
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 0.75rem;
+        }
+
+        .activity-info {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+        }
+
+        .activity-label {
+          font-size: 0.9rem;
+          color: var(--text-primary, #FFFFFF);
+        }
+
+        .activity-status {
+          font-size: 0.75rem;
+          color: var(--accent-green, #4ADE80);
+        }
+
+        .activity-time {
+          font-size: 0.75rem;
+          color: var(--text-muted, #737373);
+        }
+
+        /* === TASKS CARD === */
+        .tasks-card {
+          grid-row: 2;
+          grid-column: 2;
+        }
+
+        .task-input {
+          display: flex;
+          gap: var(--space-2, 8px);
+          margin-bottom: var(--space-4, 16px);
+        }
+
+        .task-input input {
+          flex: 1;
+          padding: var(--space-3, 12px);
+          background: var(--bg-elevated, #1C1C1C);
+          border: 1px solid var(--border-subtle, #2A2A2A);
+          border-radius: var(--radius-md, 12px);
+          color: var(--text-primary, #FFFFFF);
+          font-size: 0.85rem;
+        }
+
+        .task-input input:focus {
+          outline: none;
+          border-color: var(--accent-green, #4ADE80);
+        }
+
+        .task-input input::placeholder {
+          color: var(--text-muted, #737373);
+        }
+
+        .add-task-btn {
+          width: 44px;
+          height: 44px;
+          background: var(--accent-green, #4ADE80);
+          border: none;
+          border-radius: var(--radius-md, 12px);
+          color: var(--bg-base, #0C0C0C);
+          font-size: 1.25rem;
+          cursor: pointer;
+          transition: background 0.2s ease;
+        }
+
+        .add-task-btn:hover {
+          background: #22C55E;
+        }
+
+        .task-list {
+          display: flex;
+          flex-direction: column;
+          gap: var(--space-2, 8px);
+        }
+
+        .task-item {
+          display: flex;
+          align-items: center;
+          gap: var(--space-3, 12px);
+          padding: var(--space-3, 12px);
+          background: var(--bg-elevated, #1C1C1C);
+          border-radius: var(--radius-md, 12px);
+        }
+
+        .task-item.completed {
+          opacity: 0.5;
+        }
+
+        .task-item.completed .task-text {
+          text-decoration: line-through;
+        }
+
+        .task-checkbox {
+          width: 20px;
+          height: 20px;
+          background: var(--bg-card, #1A1A1A);
+          border: 1px solid var(--border-default, #333333);
+          border-radius: 4px;
+          color: var(--accent-green, #4ADE80);
+          font-size: 0.75rem;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .task-item.completed .task-checkbox {
+          background: var(--accent-green, #4ADE80);
+          border-color: var(--accent-green, #4ADE80);
+          color: var(--bg-base, #0C0C0C);
+        }
+
+        .task-text {
+          flex: 1;
+          font-size: 0.85rem;
+          color: var(--text-primary, #FFFFFF);
+        }
+
+        .task-delete {
+          background: none;
+          border: none;
+          color: var(--text-muted, #737373);
+          font-size: 1rem;
+          cursor: pointer;
+          opacity: 0;
+          transition: opacity 0.2s ease;
+        }
+
+        .task-item:hover .task-delete {
+          opacity: 1;
+        }
+
+        .task-delete:hover {
+          color: #F87171;
+        }
+
+        /* === EMPTY STATE === */
+        .empty-state {
+          text-align: center;
+          padding: var(--space-6, 24px);
+          color: var(--text-muted, #737373);
+        }
+
+        .empty-state p {
+          font-size: 0.9rem;
+          margin-bottom: var(--space-2, 8px);
+        }
+
+        .empty-state span {
+          font-size: 0.75rem;
+        }
+
+        .empty-state.small {
+          padding: var(--space-4, 16px);
+        }
+
+        /* === WRAPPED BANNER === */
+        .wrapped-banner {
+          margin-top: var(--space-4, 16px);
         }
       `}</style>
     </div>
   );
 }
+
+export default ActivityStatus;
